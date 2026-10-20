@@ -97,14 +97,15 @@ public final class VoiceFxController {
     }
 
     // Save current mute state, then silence the natural uplink so ONLY the
-    // processed voice reaches the remote party.
+    // processed voice reaches the remote party. mute ownership (mutedByUs) is
+    // deliberately NOT reset here: on a preset swap our mute from the previous
+    // engine is still in effect and we must keep remembering that WE own it,
+    // so the eventual stop() restores the user's original state.
     CallAudioState audioState = AudioModeProvider.getInstance().getAudioState();
     boolean alreadyMuted = audioState != null && audioState.isMuted();
     if (!alreadyMuted) {
       TelecomAdapter.getInstance().mute(true);
       mutedByUs = true;
-    } else {
-      mutedByUs = false;
     }
 
     engine = new EngineThread(context.getApplicationContext(), preset);
@@ -126,8 +127,8 @@ public final class VoiceFxController {
     }
     if (restoreMute && mutedByUs) {
       TelecomAdapter.getInstance().mute(false);
+      mutedByUs = false;
     }
-    mutedByUs = false;
     activePreset = VoiceFxProcessor.PRESET_NONE;
     Log.i(TAG, "Voice FX engine stopped, mute restored=" + restoreMute);
   }
