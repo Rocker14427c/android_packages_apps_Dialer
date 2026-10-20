@@ -592,7 +592,7 @@ interface ButtonController {
 
     @Override
     public void onClick(View v) {
-      delegate.voiceChangerClicked();
+      delegate.voiceChangerClicked(InCallButtonIds.BUTTON_VOICE_CHANGER);
     }
   }
 

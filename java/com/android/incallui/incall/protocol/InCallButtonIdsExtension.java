@@ -16,8 +16,18 @@
 
 package com.android.incallui.incall.protocol;
 
+import androidx.annotation.IntDef;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
 /** Utility class for {@link InCallButtonIds}. */
 public class InCallButtonIdsExtension {
+
+  /** Disambiguated button ids for the voice changer feature. */
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({InCallButtonIds.BUTTON_VOICE_CHANGER})
+  @interface VoiceChangerIds {}
 
   /**
    * Converts the given {@link InCallButtonIds} to a human readable string.
