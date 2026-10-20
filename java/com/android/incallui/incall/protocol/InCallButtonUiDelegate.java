@@ -63,5 +63,8 @@ public interface InCallButtonUiDelegate {
 
   default void callRecordClicked(boolean checked) {}
 
+  /** Called when the user taps the voice changer button to pick a voice preset. */
+  default void voiceChangerClicked() {}
+
   Context getContext();
 }

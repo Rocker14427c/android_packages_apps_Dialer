@@ -65,6 +65,7 @@ import com.android.incallui.hold.OnHoldFragment;
 import com.android.incallui.incall.impl.ButtonController.CallRecordButtonController;
 import com.android.incallui.incall.impl.ButtonController.SpeakerButtonController;
 import com.android.incallui.incall.impl.ButtonController.UpgradeToRttButtonController;
+import com.android.incallui.incall.impl.ButtonController.VoiceChangerButtonController;
 import com.android.incallui.incall.impl.InCallButtonGridFragment.OnButtonGridCreatedListener;
 import com.android.incallui.incall.protocol.ContactPhotoType;
 import com.android.incallui.incall.protocol.InCallButtonIds;
@@ -153,7 +154,8 @@ public class InCallFragment extends Fragment
         || id == InCallButtonIds.BUTTON_MANAGE_VOICE_CONFERENCE
         || id == InCallButtonIds.BUTTON_SWAP_SIM
         || id == InCallButtonIds.BUTTON_UPGRADE_TO_RTT
-        || id == InCallButtonIds.BUTTON_RECORD_CALL;
+        || id == InCallButtonIds.BUTTON_RECORD_CALL
+        || id == InCallButtonIds.BUTTON_VOICE_CHANGER;
   }
 
   @Override
@@ -277,6 +279,7 @@ public class InCallFragment extends Fragment
     buttonControllers.add(
         new ButtonController.SwitchToSecondaryButtonController(inCallScreenDelegate));
     buttonControllers.add(new ButtonController.CallRecordButtonController(inCallButtonUiDelegate));
+    buttonControllers.add(new ButtonController.VoiceChangerButtonController(inCallButtonUiDelegate));
 
     inCallScreenDelegate.onInCallScreenDelegateInit(this);
     inCallScreenDelegate.onInCallScreenReady();
@@ -505,6 +508,12 @@ public class InCallFragment extends Fragment
   public void setCallRecordingDuration(long durationMs) {
     ((CallRecordButtonController) getButtonController(InCallButtonIds.BUTTON_RECORD_CALL))
         .setRecordingDuration(durationMs);
+  }
+
+  @Override
+  public void setVoiceChangerState(boolean active) {
+    ((VoiceChangerButtonController) getButtonController(InCallButtonIds.BUTTON_VOICE_CHANGER))
+        .setVoiceChangerActive(active);
   }
 
   @Override

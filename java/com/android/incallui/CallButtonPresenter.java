@@ -38,6 +38,8 @@ import com.android.dialer.common.concurrent.DialerExecutorComponent;
 import com.android.dialer.telecom.TelecomUtil;
 import com.android.incallui.InCallCameraManager.Listener;
 import com.android.incallui.InCallPresenter.CanAddCallListener;
+import com.android.incallui.voicefx.VoiceFxController;
+import com.android.incallui.voicefx.VoiceFxProcessor;
 import com.android.incallui.InCallPresenter.InCallDetailsListener;
 import com.android.incallui.InCallPresenter.InCallState;
 import com.android.incallui.InCallPresenter.InCallStateListener;
@@ -50,6 +52,7 @@ import com.android.incallui.call.DialerCall;
 import com.android.incallui.call.DialerCall.CameraDirection;
 import com.android.incallui.call.DialerCallListener;
 import com.android.incallui.call.TelecomAdapter;
+import com.android.incallui.call.VoiceFxCallBridge;
 import com.android.incallui.call.state.DialerCallState;
 import com.android.incallui.incall.protocol.InCallButtonIds;
 import com.android.incallui.incall.protocol.InCallButtonUi;
@@ -343,6 +346,47 @@ public class CallButtonPresenter
   }
 
   @Override
+  public void voiceChangerClicked() {
+    LogUtil.enterBlock("CallButtonPresenter.voiceChangerClicked");
+    showVoiceChangerDialog();
+  }
+
+  /** Shows a single-choice dialog with the available voice changer presets. */
+  private void showVoiceChangerDialog() {
+    VoiceFxController.attachContext(context);
+    final CharSequence[] items = {
+      getContext().getString(R.string.voice_changer_mode_normal),
+      getContext().getString(R.string.voice_changer_mode_girl),
+      getContext().getString(R.string.voice_changer_mode_boy),
+      getContext().getString(R.string.voice_changer_mode_robot),
+      getContext().getString(R.string.voice_changer_mode_child),
+      getContext().getString(R.string.voice_changer_mode_agent),
+    };
+    // Item order matches VoiceFxProcessor.PRESET_* ids.
+    final int currentMode = VoiceFxController.get().getActivePreset();
+    new AlertDialog.Builder(getActivity())
+        .setTitle(R.string.voice_changer_dialog_title)
+        .setSingleChoiceItems(
+            items,
+            currentMode,
+            (dialog, which) -> {
+              if (which == VoiceFxProcessor.PRESET_NONE) {
+                VoiceFxController.get().stop();
+              } else {
+                VoiceFxController.get()
+                    .startForCall(context, which, VoiceFxCallBridge.getTelecomCall(call));
+              }
+              inCallButtonUi.setVoiceChangerState(which != VoiceFxProcessor.PRESET_NONE);
+              LogUtil.i(
+                  "CallButtonPresenter.showVoiceChangerDialog",
+                  "voice changer preset set to " + which);
+              dialog.dismiss();
+            })
+        .setNegativeButton(android.R.string.cancel, null)
+        .show();
+  }
+
+  @Override
   public void changeToVideoClicked() {
     LogUtil.enterBlock("CallButtonPresenter.changeToVideoClicked");
     call.getVideoTech().upgradeToVideo(context);
@@ -514,6 +558,13 @@ public class CallButtonPresenter
     boolean showUpgradeToRtt = call.canUpgradeToRttCall();
     boolean enableUpgradeToRtt = showUpgradeToRtt && call.getState() == DialerCallState.ACTIVE;
 
+    final boolean showVoiceChanger =
+        context.getResources().getBoolean(R.bool.voice_changer_enabled)
+            && !isVideo
+            && !call.isEmergencyCall()
+            && call.getState() == DialerCallState.ACTIVE
+            && userManager.isUserUnlocked();
+
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_AUDIO, true);
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_SWAP, showSwap);
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_HOLD, showHold);
@@ -536,6 +587,8 @@ public class CallButtonPresenter
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_DIALPAD, true);
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_MERGE, showMerge);
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_RECORD_CALL, showCallRecordOption);
+    inCallButtonUi.showButton(InCallButtonIds.BUTTON_VOICE_CHANGER, showVoiceChanger);
+    inCallButtonUi.setVoiceChangerState(VoiceFxController.get().isActive());
 
     inCallButtonUi.updateButtonStates();
   }

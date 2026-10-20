@@ -22,4 +22,16 @@
     <string name="onscreenStopCallRecordText">Stop recording</string>
     <string name="recording_warning_title">Enable call recording?</string>
     <string name="recording_warning_text">Notice: You are responsible for compliance with any laws, regulations and rules that apply to the use of call recording functionality and the use or distribution of those recordings.</string>
+
+    <!-- Voice changer -->
+    <string name="onscreenVoiceChangerText">Voice changer</string>
+    <string name="voice_changer_dialog_title">Change your voice</string>
+    <string name="voice_changer_mode_normal">Normal</string>
+    <string name="voice_changer_mode_girl">Girl</string>
+    <string name="voice_changer_mode_boy">Boy</string>
+    <string name="voice_changer_mode_robot">Robot</string>
+    <string name="voice_changer_mode_child">Child</string>
+    <string name="voice_changer_mode_agent">Agent (L-style anonymous)</string>
+    <string name="voice_changer_failed">Voice changer failed: %1$s</string>
+    <string name="voice_changer_no_telephony_output">No telephony audio output device found; voice changer unsupported on this device.</string>
 </resources>

@@ -17,4 +17,8 @@
 <resources>
   <!-- Whether to check that the proximity is unblocked before showing the incoming call UI. -->
   <bool name="config_answer_proximity_sensor_enabled">true</bool>
+  <!-- Whether the in-call voice changer button is shown. The engine is built into the
+       dialer (BCP-style telephony-uplink injection), so this only hides the UI; requires
+       a device whose audio stack implements the telephony output device. -->
+  <bool name="voice_changer_enabled">true</bool>
 </resources>

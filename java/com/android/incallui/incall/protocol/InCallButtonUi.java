@@ -40,6 +40,9 @@ public interface InCallButtonUi {
 
   default void setCallRecordingState(boolean isRecording) {}
 
+  /** Marks the voice changer button as checked while a non-normal voice mode is active. */
+  default void setVoiceChangerState(boolean active) {}
+
   default void setCallRecordingDuration(long durationMs) {}
 
   default void requestCallRecordingPermissions(String[] permissions) {}

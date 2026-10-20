@@ -516,6 +516,86 @@ interface ButtonController {
     }
   }
 
+  class VoiceChangerButtonController implements ButtonController, OnClickListener {
+    @NonNull private final InCallButtonUiDelegate delegate;
+    private boolean isEnabled;
+    private boolean isAllowed;
+    private boolean isChecked;
+    private CheckableLabeledButton button;
+
+    public VoiceChangerButtonController(@NonNull InCallButtonUiDelegate delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public boolean isEnabled() {
+      return isEnabled;
+    }
+
+    @Override
+    public void setEnabled(boolean isEnabled) {
+      this.isEnabled = isEnabled;
+      if (button != null) {
+        button.setEnabled(isEnabled);
+      }
+    }
+
+    @Override
+    public boolean isAllowed() {
+      return isAllowed;
+    }
+
+    @Override
+    public void setAllowed(boolean isAllowed) {
+      this.isAllowed = isAllowed;
+      if (button != null) {
+        button.setVisibility(isAllowed ? View.VISIBLE : View.INVISIBLE);
+      }
+    }
+
+    @Override
+    public void setChecked(boolean isChecked) {
+      this.isChecked = isChecked;
+      if (button != null) {
+        button.setChecked(isChecked);
+      }
+    }
+
+    @Override
+    public int getInCallButtonId() {
+      return InCallButtonIds.BUTTON_VOICE_CHANGER;
+    }
+
+    @Override
+    public void setButton(CheckableLabeledButton button) {
+      Controllers.resetButton(this.button);
+
+      this.button = button;
+      if (button != null) {
+        final Resources res = button.getContext().getResources();
+        button.setLabelText(R.string.onscreenVoiceChangerText);
+        button.setEnabled(isEnabled);
+        button.setVisibility(isAllowed ? View.VISIBLE : View.INVISIBLE);
+        button.setChecked(isChecked);
+        button.setOnClickListener(this);
+        button.setIconDrawable(R.drawable.ic_voice_changer_white_24);
+        button.setContentDescription(res.getText(R.string.onscreenVoiceChangerText));
+        // Shows the small triangle hinting that tapping opens a chooser.
+        button.setShouldShowMoreIndicator(true);
+      }
+    }
+
+    public void setVoiceChangerActive(boolean active) {
+      isChecked = active;
+      setButton(button);
+    }
+
+    @Override
+    public void onClick(View v) {
+      delegate.voiceChangerClicked();
+    }
+  }
+
   class DialpadButtonController extends SimpleCheckableButtonController {
 
     public DialpadButtonController(@NonNull InCallButtonUiDelegate delegate) {
