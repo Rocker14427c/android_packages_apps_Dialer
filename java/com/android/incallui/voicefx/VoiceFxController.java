@@ -25,28 +25,37 @@ import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
-import android.telecom.Call;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.os.Process;
+import android.telecom.CallAudioState;
 import android.util.Log;
 import android.widget.Toast;
 
 import com.android.dialer.R;
+import com.android.incallui.audiomode.AudioModeProvider;
+import com.android.incallui.call.TelecomAdapter;
 
 /**
  * In-call voice changer engine (BCP-style uplink injection, baked into the dialer).
  *
  * <p>While a call is ACTIVE and a non-normal preset is selected:
  * <pre>
- *   AudioRecord (VOICE_COMMUNICATION, HW AEC/NS) -> VoiceFxProcessor
+ *   AudioRecord (VOICE_COMMUNICATION, 48 kHz, HW AEC/NS) -> VoiceFxProcessor
  *   -> AudioTrack (USAGE_VOICE_COMMUNICATION) routed to the telephony
- *     output device (AudioDeviceInfo.TYPE_TELEPHONY) = the call uplink.
+ *      output device (AudioDeviceInfo.TYPE_TELEPHONY) = the call uplink.
  * </pre>
- * The natural mic uplink is soft-muted via {@link Call#mute(boolean)} (voice path
- * only; the capture used above keeps running) and restored on stop.
+ * The natural mic uplink is soft-muted with the exact same call the dialer's Mute
+ * button uses ({@link TelecomAdapter#mute} -> InCallService.setMuted): it silences
+ * only the telephony voice path, so the capture above keeps working and only the
+ * CHANGED voice reaches the other party. The previous mute state is saved and
+ * restored, so a pre-existing user mute is never clobbered.
  *
  * <p>Requires the MODIFY_PHONE_STATE + RECORD_AUDIO permissions the dialer already
  * carries as a privileged app, and a device whose audio stack implements the
- * telephony output device (e.g. MediaTek and Pixel-like AOSP implementations;
- * this is exactly what makes apps like BCP work on those devices).
+ * telephony output device (MediaTek and Pixel-like AOSP implementations; the same
+ * prerequisite as the "BCP" app).
  */
 public final class VoiceFxController {
 
@@ -54,8 +63,10 @@ public final class VoiceFxController {
   private static final int SAMPLE_RATE = 48000;
   private static final int CHUNK_FRAMES = SAMPLE_RATE / 100; // 10 ms slices
   private static final String WAKELOCK_TAG = "dialer:voicefx";
+  private static final long WAKELOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000L; // 4 h cap
 
   private static VoiceFxController instance;
+  private static Context appContext;
 
   public static synchronized VoiceFxController get() {
     if (instance == null) {
@@ -64,86 +75,68 @@ public final class VoiceFxController {
     return instance;
   }
 
+  /** Called by the presenter once so the controller can toast errors on the UI thread. */
+  public static void attachContext(Context context) {
+    appContext = context.getApplicationContext();
+  }
+
   private EngineThread engine;
-  private Call mutedCall;
-  private Call watchedCall;
-  private Call.Callback watcher;
   private int activePreset = VoiceFxProcessor.PRESET_NONE;
+  /** True only when WE enabled the mute (not pre-muted by the user). */
+  private boolean mutedByUs;
 
   private VoiceFxController() {}
 
-  /** Start (or restart) the engine for the given call + preset. UI thread only. */
-  public synchronized void startForCall(Context context, int preset, Call telecomCall) {
-    stopInternal(false);
+  /** Start (or restart) the engine with the given preset. UI thread only. */
+  public synchronized void start(Context context, int preset) {
+    stopInternal(false /* keepMute */);
 
-    if (preset == VoiceFxProcessor.PRESET_NONE || telecomCall == null) {
+    if (preset == VoiceFxProcessor.PRESET_NONE) {
       activePreset = VoiceFxProcessor.PRESET_NONE;
       return;
     }
 
-    try {
-      mutedCall = telecomCall;
-      telecomCall.mute(true); // soft-mute the voice path; our capture keeps running
-    } catch (Throwable t) {
-      Log.w(TAG, "Call is not mutable; user should mute manually in the dialer", t);
+    // Save current mute state, then silence the natural uplink so ONLY the
+    // processed voice reaches the remote party.
+    CallAudioState audioState = AudioModeProvider.getInstance().getAudioState();
+    boolean alreadyMuted = audioState != null && audioState.isMuted();
+    if (!alreadyMuted) {
+      TelecomAdapter.getInstance().mute(true);
+      mutedByUs = true;
+    } else {
+      mutedByUs = false;
     }
-
-    // Self-cleanup when the call ends mid-effect.
-    watchedCall = telecomCall;
-    watcher = new Call.Callback() {
-      @Override
-      public void onStateChanged(Call call, int state) {
-        if (state == Call.STATE_DISCONNECTING || state == Call.STATE_DISCONNECTED) {
-          mainHandler().post(VoiceFxController.this::stop);
-        }
-      }
-    };
-    watchedCall.registerCallback(watcher);
 
     engine = new EngineThread(context.getApplicationContext(), preset);
     activePreset = preset;
     engine.start();
-    Log.i(TAG, "Voice FX engine started, preset=" + preset);
+    Log.i(TAG, "Voice FX engine started, preset=" + preset + ", mutedByUs=" + mutedByUs);
   }
 
-  /** Stop the engine (if running) and unmute the uplink. UI thread only. */
+  /** Stop the engine (if running) and restore the uplink mute as it was. UI thread only. */
   public synchronized void stop() {
-    stopInternal(true);
+    stopInternal(true /* restoreMute */);
   }
 
-  private void stopInternal(boolean unmute) {
+  private void stopInternal(boolean restoreMute) {
     if (engine != null) {
       engine.cancel();
-      // Do not block the UI: let the thread drain; track/record are released in its finally.
+      // The thread releases AudioTrack/AudioRecord itself in its finally block.
       engine = null;
     }
-    if (watcher != null && watchedCall != null) {
-      try {
-        watchedCall.unregisterCallback(watcher);
-      } catch (Throwable ignored) {
-      }
+    if (restoreMute && mutedByUs) {
+      TelecomAdapter.getInstance().mute(false);
     }
-    watcher = null;
-    if (unmute && mutedCall != null) {
-      try {
-        mutedCall.mute(false);
-      } catch (Throwable ignored) {
-      }
-    }
-    watchedCall = null;
-    mutedCall = null;
+    mutedByUs = false;
     activePreset = VoiceFxProcessor.PRESET_NONE;
-    Log.i(TAG, "Voice FX engine stopped");
-  }
-
-  private static android.os.Handler mainHandler() {
-    return new android.os.Handler(android.os.Looper.getMainLooper());
+    Log.i(TAG, "Voice FX engine stopped, mute restored=" + restoreMute);
   }
 
   public synchronized boolean isActive() {
     return engine != null && engine.isAlive();
   }
 
+  /** Current engine preset, or PRESET_NONE when the engine is not running. */
   public synchronized int getActivePreset() {
     return isActive() ? activePreset : VoiceFxProcessor.PRESET_NONE;
   }
@@ -166,14 +159,18 @@ public final class VoiceFxController {
       cancelled = true;
     }
 
-    @SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission") // RECORD_AUDIO is held by the dialer itself
     @Override
     public void run() {
+      Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+
       String failure = null;
       AudioRecord record = null;
       AudioTrack track = null;
+      PowerManager.WakeLock wakeLock = null;
       try {
-        AudioManager am = context.getSystemService(AudioManager.class);
+        final AudioManager am = context.getSystemService(AudioManager.class);
+
         AudioDeviceInfo telephonyOut = null;
         for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
           if (d.getType() == AudioDeviceInfo.TYPE_TELEPHONY) {
@@ -185,7 +182,7 @@ public final class VoiceFxController {
           throw new Exception(context.getString(R.string.voice_changer_no_telephony_output));
         }
 
-        final AudioFormat fmt = new AudioFormat.Builder()
+        final AudioFormat fmtIn = new AudioFormat.Builder()
             .setSampleRate(SAMPLE_RATE)
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -196,9 +193,9 @@ public final class VoiceFxController {
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .build();
 
-        int inBuf = AudioRecord.getMinBufferSize(
+        final int inBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        int outBuf = AudioTrack.getMinBufferSize(
+        final int outBuf = AudioTrack.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (inBuf <= 0 || outBuf <= 0) {
           throw new Exception("Invalid audio buffer sizes: in=" + inBuf + " out=" + outBuf);
@@ -206,8 +203,8 @@ public final class VoiceFxController {
 
         record = new AudioRecord.Builder()
             .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-            .setAudioFormat(fmt)
-            .setBufferSizeInBytes(Math.max(inBuf * 2, CHUNK_FRAMES * 2 * 4))
+            .setAudioFormat(fmtIn)
+            .setBufferSizeInBytes(Math.max(inBuf * 4, CHUNK_FRAMES * 2 * 4))
             .build();
         if (record.getState() != AudioRecord.STATE_INITIALIZED) {
           throw new Exception("Failed to open microphone");
@@ -218,7 +215,7 @@ public final class VoiceFxController {
                 .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .build())
             .setAudioFormat(fmtOut)
-            .setBufferSizeInBytes(Math.max(outBuf * 2, CHUNK_FRAMES * 2 * 4))
+            .setBufferSizeInBytes(Math.max(outBuf * 4, CHUNK_FRAMES * 2 * 4))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build();
         if (track.getState() != AudioTrack.STATE_INITIALIZED) {
@@ -231,61 +228,60 @@ public final class VoiceFxController {
         final VoiceFxProcessor processor = new VoiceFxProcessor(SAMPLE_RATE);
         processor.setPreset(preset);
 
+        final PowerManager pm = context.getSystemService(PowerManager.class);
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG);
+        wakeLock.acquire(WAKELOCK_TIMEOUT_MS);
+
         record.startRecording();
         track.play();
-        Log.d(TAG, "Engine pipeline running");
+        if (track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+          throw new Exception("AudioTrack failed to start");
+        }
+        Log.d(TAG, "Engine pipeline running (chunk=" + CHUNK_FRAMES + " frames)");
 
         final short[] buf = new short[CHUNK_FRAMES];
-        int presetNow = preset;
         while (!cancelled) {
           final int n = record.read(buf, 0, CHUNK_FRAMES);
           if (n <= 0) {
             Log.w(TAG, "AudioRecord.read -> " + n);
             continue;
           }
-          // Live preset switching requires a configure on the audio thread; poll each slice.
-          final int wanted = getActivePreset();
-          if (wanted != presetNow) {
-            processor.setPreset(wanted);
-            presetNow = wanted;
-          }
           processor.process(buf, n);
           track.write(buf, 0, n);
         }
       } catch (Exception e) {
         Log.e(TAG, "Voice FX engine error", e);
-        failure = e.getLocalizedMessage();
+        if (!cancelled) {
+          failure = e.getLocalizedMessage();
+        }
       } finally {
-        try { if (track != null) track.stop(); } catch (Throwable ignored) {}
         try { if (record != null) record.stop(); } catch (Throwable ignored) {}
+        try { if (track != null) track.stop(); } catch (Throwable ignored) {}
         if (track != null) track.release();
         if (record != null) record.release();
-        if (failure != null) {
-          showFailure(failure);
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+
+        if (!cancelled) {
+          // The engine died on its own (error or call end tore the pipe down):
+          // tidy up the controller (restores mute) back on the UI thread.
+          new Handler(Looper.getMainLooper()).post(VoiceFxController.this::stop);
+          if (failure != null) showFailure(failure);
         }
-        // Thread exited: drop our reference so isActive() becomes false.
         synchronized (VoiceFxController.this) {
           if (engine == this) {
             engine = null;
-            stopInternal(true);
+            activePreset = VoiceFxProcessor.PRESET_NONE;
           }
         }
       }
     }
   }
 
-  private void showFailure(final String msg) {
-    Context c = appContext;
-    if (c != null) {
-      mainHandler().post(() -> Toast.makeText(
-          c, c.getString(R.string.voice_changer_failed, msg), Toast.LENGTH_LONG).show());
+  private static void showFailure(String msg) {
+    if (appContext != null) {
+      new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(
+          appContext, appContext.getString(R.string.voice_changer_failed, msg),
+          Toast.LENGTH_LONG).show());
     }
-  }
-
-  private static Context appContext;
-
-  /** Called from the presenter once so the controller can toast errors. */
-  public static void attachContext(Context context) {
-    appContext = context.getApplicationContext();
   }
 }

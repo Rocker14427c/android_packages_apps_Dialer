@@ -52,7 +52,6 @@ import com.android.incallui.call.DialerCall;
 import com.android.incallui.call.DialerCall.CameraDirection;
 import com.android.incallui.call.DialerCallListener;
 import com.android.incallui.call.TelecomAdapter;
-import com.android.incallui.call.VoiceFxCallBridge;
 import com.android.incallui.call.state.DialerCallState;
 import com.android.incallui.incall.protocol.InCallButtonIds;
 import com.android.incallui.incall.protocol.InCallButtonUi;
@@ -254,6 +253,14 @@ public class CallButtonPresenter
 
   @Override
   public void muteClicked(boolean checked, boolean clickedByUser) {
+    // While the voice changer is active, the uplink is already muted by us so that only
+    // the processed voice is heard. Tapping Mute therefore first disables the FX (which
+    // restores the uplink), then applies the user's requested mute state.
+    if (VoiceFxController.get().isActive()) {
+      LogUtil.i("CallButtonPresenter", "mute tapped while voice changer active; stopping FX");
+      VoiceFxController.get().stop();
+      inCallButtonUi.setVoiceChangerState(false);
+    }
     LogUtil.i(
         "CallButtonPresenter", "turning on mute: %s, clicked by user: %s", checked, clickedByUser);
     TelecomAdapter.getInstance().mute(checked);
@@ -373,8 +380,7 @@ public class CallButtonPresenter
               if (which == VoiceFxProcessor.PRESET_NONE) {
                 VoiceFxController.get().stop();
               } else {
-                VoiceFxController.get()
-                    .startForCall(context, which, VoiceFxCallBridge.getTelecomCall(call));
+                VoiceFxController.get().start(context, which);
               }
               inCallButtonUi.setVoiceChangerState(which != VoiceFxProcessor.PRESET_NONE);
               LogUtil.i(
@@ -564,6 +570,14 @@ public class CallButtonPresenter
             && !call.isEmergencyCall()
             && call.getState() == DialerCallState.ACTIVE
             && userManager.isUserUnlocked();
+
+    // Production guard: the FX engine must never outlive the conditions above  - 
+    // stop it when the call is no longer ACTIVE or becomes a video call.
+    if (VoiceFxController.get().isActive() && !showVoiceChanger) {
+      LogUtil.i("CallButtonPresenter.updateInCallButtons", "stopping voice changer");
+      VoiceFxController.get().stop();
+      inCallButtonUi.setVoiceChangerState(false);
+    }
 
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_AUDIO, true);
     inCallButtonUi.showButton(InCallButtonIds.BUTTON_SWAP, showSwap);
