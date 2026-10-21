@@ -590,7 +590,7 @@ def main() -> int:
 
     # The assembled dex must contain exactly the classes we spliced in.
     verify_tree = work / "verify_smali"
-    disassemble(java, baksmali_jar, patched_dex, verify_tree, "--skip-debug")
+    disassemble(java, baksmali_jar, patched_dex, verify_tree)
     verify_classes = index_classes(verify_tree)
     missing = [c for c in new_classes if c not in verify_classes]
     if missing:
