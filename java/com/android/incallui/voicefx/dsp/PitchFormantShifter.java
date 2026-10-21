@@ -68,6 +68,9 @@ public final class PitchFormantShifter {
 
   /** Samples of overlap-add that are thrown away at start-up, while the window weight fills in. */
   private static final int EMIT_START = FRAME;
+  /** Synthesis hop bounds: 0.4x .. 2.5x the analysis hop, i.e. the whole alpha range. */
+  private static final int MIN_SYNTHESIS_HOP = (int) (ANALYSIS_HOP * 0.4) - 1;
+  private static final int MAX_SYNTHESIS_HOP = (int) Math.round(ANALYSIS_HOP * 2.5);
   private static final float PEAK_FLOOR = 0.0005f;
   /** Half width (in bins) of the constant-Q envelope smoother: at least this many bins, and
    * otherwise this fraction of the bin index, so low formants are not smeared away. */
@@ -154,10 +157,12 @@ public final class PitchFormantShifter {
     }
     stretch = alpha;
     int hop = (int) Math.round(ANALYSIS_HOP * alpha);
-    if (hop < ANALYSIS_HOP / 2) {
-      hop = ANALYSIS_HOP / 2;
-    } else if (hop > ANALYSIS_HOP * 2) {
-      hop = ANALYSIS_HOP * 2;
+    // The clamp must cover the whole alpha range the presets use (0.4 .. 2.5), otherwise a preset
+    // that asks for +14 semitones would silently get +12 while still reporting +14.
+    if (hop < MIN_SYNTHESIS_HOP) {
+      hop = MIN_SYNTHESIS_HOP;
+    } else if (hop > MAX_SYNTHESIS_HOP) {
+      hop = MAX_SYNTHESIS_HOP;
     }
     synthesisHop = hop;
   }

@@ -33,7 +33,6 @@ import android.telecom.CallAudioState;
 import android.util.Log;
 import android.widget.Toast;
 
-import com.android.dialer.R;
 import com.android.incallui.audiomode.AudioModeProvider;
 import com.android.incallui.call.TelecomAdapter;
 
@@ -67,6 +66,14 @@ public final class VoiceFxController {
   private static final String PREFS_NAME = "voice_changer";
   private static final String KEY_MEDIAN_F0 = "median_f0_hz";
   private static final long WAKELOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000L; // 4 h cap
+
+  // Same text as voice_changer_failed / voice_changer_no_telephony_output in
+  // res/values/cm_strings.xml. Kept inline because this class is compiled
+  // separately from the rest of the dialer (see tools/voicefx): a compiled-in
+  // resource id would be wrong the moment the resource table is rebuilt.
+  private static final String MSG_FAILED = "Voice changer failed: %1$s";
+  private static final String MSG_NO_TELEPHONY_OUTPUT =
+      "No telephony audio output device found; voice changer unsupported on this device.";
 
   private static VoiceFxController instance;
   private static Context appContext;
@@ -208,7 +215,7 @@ public final class VoiceFxController {
           }
         }
         if (telephonyOut == null) {
-          throw new Exception(context.getString(R.string.voice_changer_no_telephony_output));
+          throw new Exception(MSG_NO_TELEPHONY_OUTPUT);
         }
 
         final AudioFormat fmtIn = new AudioFormat.Builder()
@@ -304,7 +311,13 @@ public final class VoiceFxController {
         if (!cancelled) {
           // The engine died on its own (error or call end tore the pipe down):
           // tidy up the controller (restores mute) back on the UI thread.
-          new Handler(Looper.getMainLooper()).post(VoiceFxController.this::stop);
+          new Handler(Looper.getMainLooper())
+              .post(new Runnable() {
+                @Override
+                public void run() {
+                  VoiceFxController.this.stop();
+                }
+              });
           if (failure != null) showFailure(failure);
         }
         synchronized (VoiceFxController.this) {
@@ -319,9 +332,14 @@ public final class VoiceFxController {
 
   private static void showFailure(String msg) {
     if (appContext != null) {
-      new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(
-          appContext, appContext.getString(R.string.voice_changer_failed, msg),
-          Toast.LENGTH_LONG).show());
+      final String text = String.format(MSG_FAILED, msg);
+      new Handler(Looper.getMainLooper())
+          .post(new Runnable() {
+            @Override
+            public void run() {
+              Toast.makeText(appContext, text, Toast.LENGTH_LONG).show();
+            }
+          });
     }
   }
 }
