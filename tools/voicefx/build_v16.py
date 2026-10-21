@@ -274,8 +274,18 @@ def disassemble(java: str, baksmali: Path, dex: Path, out: Path, *extra) -> None
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    run([java, "-Xmx4g", "-jar", str(baksmali), "disassemble", *extra, str(dex), "-o", str(out)],
-        f"baksmali {dex.name}")
+    cmd = [java, "-Xmx4g", "-jar", str(baksmali), "disassemble", *extra, str(dex), "-o", str(out)]
+    rc, so, se = try_run(cmd)
+    n = sum(1 for _ in out.rglob("*.smali"))
+    log(f"baksmali {dex.name}: {n} smali files, exit {rc}, "
+        f"{dex.stat().st_size}B dex, stdout {len(so)}B, stderr {len(se)}B")
+    if se.strip():
+        log("baksmali stderr: " + " ".join(se.strip().splitlines()[:6])[:800])
+    if rc != 0:
+        die(f"baksmali {dex.name} failed (exit {rc})\n--- stdout ---\n{so[-4000:]}"
+            f"\n--- stderr ---\n{se[-4000:]}")
+    if not n:
+        die(f"baksmali {dex.name} wrote nothing to {out}")
 
 
 # ---------------------------------------------------------------------------
