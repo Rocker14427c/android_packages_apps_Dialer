@@ -36,9 +36,9 @@ from scipy.signal import resample_poly
 FS = 48000
 BLOCK = 480            # 10 ms @ 48 kHz — same cadence as VoiceFxController
 F0_DECIM = 3           # F0 tracker runs at 16 kHz
-F0_WIN_S = 0.030       # 30 ms tracker window
+F0_WIN_S = 0.040       # 40 ms tracker window (max-quality mode)
 F0_MIN, F0_MAX = 65.0, 340.0
-LOOKAHEAD_S = 0.035    # PSOLA look-ahead behind the input frontier
+LOOKAHEAD_S = 0.045    # PSOLA look-ahead behind the input frontier
 
 # ---------------------------------------------------------------- presets ---
 # Keep in sync with VoiceFxProcessor.java (v1.5 / VoiceFxProcessor v2).
@@ -72,11 +72,11 @@ class Preset:
 
 GIRL = Preset(
     "girl",
-    target_f0=196.0, ratio_min=1.35, ratio_max=1.85, base_ratio=2 ** (7.5 / 12),
+    target_f0=196.0, ratio_min=1.35, ratio_max=1.90, base_ratio=2 ** (7.5 / 12),
     formant=1.17, intonation=1.10,
     eq=[("hp", 100, 0.707, 0), ("lowshelf", 300, 0.707, -2.5),
         ("peak", 3200, 0.8, 1.5), ("highshelf", 6500, 0.707, 2.0)],
-    breath=0.012, comp_ratio=3.0, comp_thr_db=-20.0,
+    breath=0.015, comp_ratio=3.0, comp_thr_db=-20.0,
 )
 AGENT = Preset(
     "agent",
@@ -177,6 +177,7 @@ class F0Tracker:
         self.voiced = False
         self.f0 = 120.0
         self.log_median = math.log(120.0)  # running source median (voiced only)
+        self._hist: list = []          # last voiced estimates (median-of-3)
 
     def push_block(self, x: np.ndarray) -> tuple[float, bool]:
         # one-pole low-pass (~900 Hz @48k) then keep every 3rd sample
@@ -206,6 +207,7 @@ class F0Tracker:
         rms = math.sqrt(float(np.mean(ref ** 2)) + 1e-18)
         if rms < 0.004:
             self.voiced = False
+            self._hist = []
             return self.f0, False
         # center clipping reduces formant influence on the correlation
         clip = 0.3 * float(np.max(np.abs(ref)))
@@ -227,6 +229,7 @@ class F0Tracker:
                 break
         if best < 0.42:
             self.voiced = False
+            self._hist = []
             return self.f0, False
         # parabolic interpolation around the chosen lag
         lag_f = float(chosen)
@@ -237,6 +240,18 @@ class F0Tracker:
                 lag_f += 0.5 * (y0 - y2) / den
         f0 = self.fsd / max(lag_f, 1.0)
         f0 = min(max(f0, F0_MIN), F0_MAX)
+        # Octave-error correction against the slow median (exact 2x/0.5x
+        # jumps are tracker mistakes, not real voice movement), then a
+        # median-of-3 over voiced estimates kills single-block warble.
+        med = math.exp(self.log_median)
+        r = f0 / med
+        if 1.8 <= r <= 2.25 and f0 / 2 >= F0_MIN:
+            f0 /= 2.0
+        elif 0.44 <= r <= 0.56 and f0 * 2 <= F0_MAX:
+            f0 *= 2.0
+        self._hist = (self._hist + [f0])[-3:]
+        if len(self._hist) == 3:
+            f0 = sorted(self._hist)[1]
         self.f0 = f0
         self.period = self.fs / f0
         self.voiced = True

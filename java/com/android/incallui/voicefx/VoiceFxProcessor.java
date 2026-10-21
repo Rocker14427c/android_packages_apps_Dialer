@@ -36,7 +36,7 @@ package com.android.incallui.voicefx;
  * </pre>
  *
  * <p>GIRL (natural adult woman from an adult-male source) adaptively targets
- * a ~196 Hz median F0 with the ratio clamped to x1.35..x1.85, formants at
+ * a ~196 Hz median F0 with the ratio clamped to x1.35..x1.90, formants at
  * x1.17 (shorter vocal tract), slightly widened intonation, chest cut,
  * presence lift and a touch of breath. AGENT (Death Note "L" laptop voice)
  * is three PSOLA layers of the same voice (-7 st / -2 st / +5 st) over a
@@ -44,8 +44,9 @@ package com.android.incallui.voicefx;
  * copies are how that effect is actually built, not a single deep pitch.
  *
  * <p>Budget-device budget: no allocation in {@link #process}, circular
- * buffers only, F0 correlation at 16 kHz (~10 MMAC/s), grain synthesis a few
- * MFLOPS. Added latency ≈ 35 ms look-ahead + one pitch period.
+ * buffers only, F0 correlation at 16 kHz (~13 MMAC/s, 40 ms window with
+ * octave correction + median-of-3 smoothing), grain synthesis a few MFLOPS.
+ * Added latency ≈ 45 ms look-ahead + one pitch period.
  *
  * <p>The parameter-mirrored Python reference in {@code tools/voicefx/}
  * ({@code psola_lab.py}) renders these exact presets offline for audition
@@ -67,7 +68,7 @@ public final class VoiceFxProcessor {
   // 1.17 ~= adult female vocal tract; 1.10 = subtle, 1.25 = young/cute.
   private static final float GIRL_TARGET_F0_HZ = 196f;
   private static final float GIRL_RATIO_MIN = 1.35f;
-  private static final float GIRL_RATIO_MAX = 1.85f;
+  private static final float GIRL_RATIO_MAX = 1.90f;
   private static final float GIRL_FORMANT = 1.17f;
   private static final float GIRL_INTONATION = 1.10f; // slightly wider melody
 
@@ -158,13 +159,16 @@ public final class VoiceFxProcessor {
   private final class F0Tracker {
     private static final int DECIM = 3;
     private final int fsd;         // decimated rate
-    private final int win;         // 30 ms @ decimated rate
+    private final int win;         // 40 ms @ decimated rate (max-quality mode)
     private final int lagLo;
     private final int lagHi;
-    private final float[] dec = new float[1024];
+    private final float[] dec = new float[2048];
+    private final int decMask = dec.length - 1;
     private final float[] frame;   // clipped frame scratch (win + lagHi)
     private final float[] sqPrefix;
     private final float[] nsdf;
+    private final float[] hist = new float[3]; // median-of-3 over voiced F0
+    private int histCount;
     private long decAbs;
     private float lp;
     private int phase;
@@ -175,7 +179,7 @@ public final class VoiceFxProcessor {
 
     F0Tracker(float sampleRate) {
       fsd = (int) (sampleRate / DECIM);
-      win = (int) (0.030f * fsd);
+      win = (int) (0.040f * fsd);
       lagLo = Math.max(2, (int) (fsd / F0_MAX_HZ));
       lagHi = (int) (fsd / F0_MIN_HZ);
       frame = new float[win + lagHi + 2];
@@ -190,6 +194,7 @@ public final class VoiceFxProcessor {
       phase = 0;
       f0 = 120f;
       voiced = false;
+      histCount = 0;
       logMedian = Math.log(120.0);
       for (int i = 0; i < dec.length; i++) dec[i] = 0f;
     }
@@ -205,7 +210,7 @@ public final class VoiceFxProcessor {
         lp += a * (x[i] - lp);
         if (++phase == DECIM) {
           phase = 0;
-          dec[(int) (decAbs & 1023)] = lp;
+          dec[(int) (decAbs & decMask)] = lp;
           decAbs++;
         }
       }
@@ -213,7 +218,7 @@ public final class VoiceFxProcessor {
     }
 
     private float decAt(long abs) {
-      return dec[(int) (abs & 1023)];
+      return dec[(int) (abs & decMask)];
     }
 
     private void estimate() {
@@ -238,6 +243,7 @@ public final class VoiceFxProcessor {
       }
       if (Math.sqrt(sq / win) < 0.004) {
         voiced = false;
+        histCount = 0;
         return;
       }
       float clip = 0.3f * peakAbs;
@@ -265,6 +271,7 @@ public final class VoiceFxProcessor {
       }
       if (best < 0.42f) {
         voiced = false;
+        histCount = 0;
         return;
       }
       int chosen = bestLag;
@@ -282,7 +289,29 @@ public final class VoiceFxProcessor {
         if (Math.abs(den) > 1e-12f) lagF += 0.5f * (y0 - y2) / den;
       }
       float est = fsd / Math.max(lagF, 1f);
-      f0 = Math.min(Math.max(est, F0_MIN_HZ), F0_MAX_HZ);
+      est = Math.min(Math.max(est, F0_MIN_HZ), F0_MAX_HZ);
+      // Octave-error correction against the slow median (exact 2x/0.5x
+      // jumps are tracker mistakes, not real voice movement), then a
+      // median-of-3 over voiced estimates kills single-block warble.
+      float med = medianF0();
+      float rr = est / med;
+      if (rr >= 1.8f && rr <= 2.25f && est * 0.5f >= F0_MIN_HZ) {
+        est *= 0.5f;
+      } else if (rr >= 0.44f && rr <= 0.56f && est * 2f <= F0_MAX_HZ) {
+        est *= 2f;
+      }
+      if (histCount < 3) {
+        hist[histCount++] = est;
+      } else {
+        hist[0] = hist[1];
+        hist[1] = hist[2];
+        hist[2] = est;
+      }
+      if (histCount == 3) {
+        float a = hist[0], b = hist[1], c = hist[2];
+        est = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+      }
+      f0 = est;
       periodFs = fs / f0;
       voiced = true;
       logMedian += 0.03 * (Math.log(f0) - logMedian);
@@ -345,7 +374,7 @@ public final class VoiceFxProcessor {
         layerFormant[i] = formants[i];
         layerGain[i] = gains[i];
       }
-      lookahead = (int) (0.035f * fs);
+      lookahead = (int) (0.045f * fs);
       unvoicedPeriod = Math.max(24, (int) (fs / 200f));
       tail = (int) (fs / F0_MIN_HZ) + 1;
       reset();
@@ -715,7 +744,7 @@ public final class VoiceFxProcessor {
         setEq(1, Biquad.LOWSHELF, 300f, 0.707f, -2.5f);   // chest cut
         setEq(2, Biquad.PEAK, 3200f, 0.8f, 1.5f);          // presence
         setEq(3, Biquad.HIGHSHELF, 6500f, 0.707f, 2f);     // brightness
-        breathGain = 0.012f;
+        breathGain = 0.015f;
         comp.configure(fs, 3f, -20f);
         break;
       case PRESET_BOY:

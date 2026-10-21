@@ -1,0 +1,234 @@
+name: Build VoiceFX v1.5 module
+
+# Builds the flashable VoiceFX-Dialer-Module-v1.5.zip (TD-PSOLA engine)
+# from the released v1.4 module: swaps ONLY VoiceFxProcessor smali inside
+# AxionVoiceDialer.apk, re-signs, verifies package com.axionvoice.dialer,
+# and publishes a v1.5 GitHub Release. Run manually: Actions -> this
+# workflow -> Run workflow (or `gh workflow run`).
+#
+# Signing key handling:
+#  - If repo secrets VOICEFX_KS_B64 (base64 keystore) + VOICEFX_KS_PASS
+#    exist, they are used (do this for v1.6+ so updates keep one key).
+#  - Otherwise a fresh RSA-4096 key is generated in-run; its password is
+#    masked in logs and the keystore is handed over ONLY as the
+#    short-lived "VOICEFX-SIGNING-KEY" artifact (7 days). Download it
+#    from the run page immediately and keep it safe forever.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish/refresh the v1.5-voicefx GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: voicefx-v15-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Fetch smali/baksmali 2.5.2 (v1.4-proven toolchain)
+        run: |
+          mkdir -p tools/voicefx/.tools
+          curl -fL --retry 3 -o tools/voicefx/.tools/smali.jar \
+            https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar
+          curl -fL --retry 3 -o tools/voicefx/.tools/baksmali.jar \
+            https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar
+          ls -lh tools/voicefx/.tools/
+          java -jar tools/voicefx/.tools/smali.jar --version || true
+          java -jar tools/voicefx/.tools/baksmali.jar --version || true
+
+      - name: Download v1.4 base module (release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p base
+          gh release download v1.4-voicefx --repo "$GITHUB_REPOSITORY" \
+            --pattern 'VoiceFX-Dialer-Module-v1.4.zip' --dir base
+          ls -lh base/
+          md5sum base/VoiceFX-Dialer-Module-v1.4.zip
+
+      - name: Prepare signing key (secret if present, else generate)
+        env:
+          VOICEFX_KS_B64: ${{ secrets.VOICEFX_KS_B64 }}
+          VOICEFX_KS_PASS: ${{ secrets.VOICEFX_KS_PASS }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          if [ -n "$VOICEFX_KS_B64" ]; then
+            if [ -z "$VOICEFX_KS_PASS" ]; then
+              echo "VOICEFX_KS_B64 is set but VOICEFX_KS_PASS is empty" >&2
+              exit 1
+            fi
+            printf '%s' "$VOICEFX_KS_B64" | base64 -d > "$RUNNER_TEMP/signing/voicefx-release.jks"
+            echo "KS_PASS=$VOICEFX_KS_PASS" >> "$GITHUB_ENV"
+            echo "Using keystore from repo secrets."
+          else
+            KS_PASS=""
+            while [ "${#KS_PASS}" -lt 18 ]; do
+              KS_PASS=$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 22)
+            done
+            echo "::add-mask::$KS_PASS"
+            echo "KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
+            keytool -genkeypair -v \
+              -keystore "$RUNNER_TEMP/signing/voicefx-release.jks" \
+              -alias voicefx -keyalg RSA -keysize 4096 -validity 10950 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=VoiceFX Dialer, OU=AxionVoice, O=Rocker14427c, L=Patna, ST=Bihar, C=IN"
+            mkdir -p signing-out
+            cp "$RUNNER_TEMP/signing/voicefx-release.jks" signing-out/voicefx-release.jks
+            CERT_SHA=$(keytool -list -v -keystore "$RUNNER_TEMP/signing/voicefx-release.jks" \
+              -storepass "$KS_PASS" | grep 'SHA256:' | head -1 | sed 's/.*SHA256: *//')
+            {
+              echo "VoiceFX Dialer signing key - KEEP THIS FILE + THE .jks SAFE FOREVER"
+              echo "================================================================"
+              echo "Keystore file : voicefx-release.jks"
+              echo "Alias         : voicefx"
+              echo "Store password: $KS_PASS"
+              echo "Key password  : $KS_PASS"
+              echo "Cert SHA-256  : $CERT_SHA"
+              echo ""
+              echo "From v1.5 onwards com.axionvoice.dialer is signed with THIS key."
+              echo "Every future update must use it, or Android rejects the upgrade."
+              echo "Back it up in 2+ places. If lost: uninstall module -> reboot ->"
+              echo "fresh-install a build signed with a new key."
+              echo ""
+              echo "INSTALL v1.5 (signature changed vs v1.4 - ORDER MATTERS):"
+              echo "1. Uninstall the v1.4 module in ReSukiSU, then REBOOT."
+              echo "2. Install VoiceFX-Dialer-Module-v1.5.zip, then REBOOT."
+            } > signing-out/KEYSTORE-README.txt
+            echo "Generated a fresh signing key for this build (see signing artifact)."
+          fi
+          keytool -list -keystore "$RUNNER_TEMP/signing/voicefx-release.jks" -storepass "$KS_PASS" | head -6
+
+      - name: Build v1.5 module
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/build-tools" | tail -4
+          python3 --version
+          python3 tools/voicefx/build_v15.py \
+            --v14-zip base/VoiceFX-Dialer-Module-v1.4.zip \
+            --keystore "$RUNNER_TEMP/signing/voicefx-release.jks" \
+            --ks-pass "$KS_PASS" \
+            --ks-alias voicefx \
+            --allow-different-cert \
+            --out out
+          echo "--- outputs ---"
+          ls -lh out/
+          cat out/md5.txt
+          cat out/BUILD_REPORT_V15.md
+
+      - name: Verify module zip layout
+        run: |
+          python3 - <<'EOF'
+          import zipfile
+          z = zipfile.ZipFile("out/VoiceFX-Dialer-Module-v1.5.zip")
+          names = z.namelist()
+          for n in names:
+              print(n)
+          assert "module.prop" in names, "module.prop missing at zip root"
+          apks = [n for n in names if n.endswith(".apk")]
+          assert len(apks) == 1, f"expected 1 apk, got {apks}"
+          for required in ("customize.sh", "service.sh", "uninstall.sh"):
+              assert any(n.endswith(required) for n in names), f"{required} missing"
+          print("LAYOUT OK, apk:", apks[0])
+          print("--- module.prop ---")
+          print(z.read("module.prop").decode())
+          EOF
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceFX-Dialer-Module-v1.5
+          path: out/
+          retention-days: 30
+
+      - name: Upload signing key artifact (only when generated in-run)
+        if: ${{ hashFiles('signing-out/voicefx-release.jks') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOICEFX-SIGNING-KEY-DOWNLOAD-AND-KEEP
+          path: signing-out/
+          retention-days: 7
+
+      - name: Publish GitHub Release v1.5
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ZIP_MD5=$(awk '/VoiceFX-Dialer-Module-v1.5.zip/{print $1}' out/md5.txt)
+          APK_MD5=$(awk '/AxionVoiceDialer.apk/{print $1}' out/md5.txt)
+          CERT_LINE=$(grep 'Signing cert SHA-256' out/BUILD_REPORT_V15.md || true)
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          ## VoiceFX Dialer — v1.5 (TD-PSOLA realistic voices)
+
+          New voice engine: streaming TD-PSOLA with independent pitch + formant control.
+          **Girl** is now a natural adult-woman conversion (adaptive ~196 Hz target, formant x1.17)
+          instead of a pitched-up male voice. **Agent** is rebuilt the way L's laptop voice
+          actually works — layered -7/-2/+5 semitone copies, monotonized, band-limited —
+          instead of ring-mod robot. Same v1.4 packaging, hooks and rollback; only the
+          \`VoiceFxProcessor\` DSP differs.
+
+          > ⚠️ **SIGNATURE CHANGED (new custom key) — install order is mandatory:**
+          > 1. **Uninstall the v1.4 module** in ReSukiSU/Magisk → **reboot** (stock Phone returns).
+          > 2. Install \`VoiceFX-Dialer-Module-v1.5.zip\` → **reboot**.
+          > Installing over v1.4 directly will make Android ignore the app (signature mismatch).
+          > Calls never break either way — the stock dialer takes over automatically.
+
+          **Signing key:** if this build generated a fresh key, download the
+          \`VOICEFX-SIGNING-KEY-DOWNLOAD-AND-KEEP\` artifact from the Actions run within
+          7 days and keep \`voicefx-release.jks\` + its password (in KEYSTORE-README.txt)
+          safe forever — all future updates must be signed with it.
+          $CERT_LINE
+
+          ### Verify before flashing
+          - zip md5: \`$ZIP_MD5\`
+          - APK md5: \`$APK_MD5\`
+          - package: \`com.axionvoice.dialer\` (side-by-side; stock Phone untouched)
+
+          ### Rollback
+          Uninstall the module → reboot. Everything (Phone role, stock InCallService)
+          is restored, exactly as in v1.4. Nothing was written to real partitions.
+
+          Source: branch \`arena/9b45dd67-android-packages-apps-dialer\` (PR #1 into \`voice-changer\`).
+          NOTES
+          if gh release view v1.5-voicefx --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v1.5-voicefx --repo "$GITHUB_REPOSITORY" --clobber \
+              out/VoiceFX-Dialer-Module-v1.5.zip out/AxionVoiceDialer.apk out/md5.txt out/BUILD_REPORT_V15.md
+            gh release edit v1.5-voicefx --repo "$GITHUB_REPOSITORY" \
+              --title "VoiceFX Dialer module v1.5 — TD-PSOLA realistic Girl + Agent" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create v1.5-voicefx --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "VoiceFX Dialer module v1.5 — TD-PSOLA realistic Girl + Agent" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              out/VoiceFX-Dialer-Module-v1.5.zip out/AxionVoiceDialer.apk out/md5.txt out/BUILD_REPORT_V15.md
+          fi
+          gh release view v1.5-voicefx --repo "$GITHUB_REPOSITORY" --json url,tagName --jq '.url'
+
+      - name: Run summary
+        run: |
+          {
+            echo "## VoiceFX v1.5 build complete"
+            echo ""
+            cat out/md5.txt
+            echo ""
+            echo "- **Flash:** download \`VoiceFX-Dialer-Module-v1.5.zip\` from the v1.5-voicefx Release (or the artifact above)."
+            echo "- **⚠️ Uninstall v1.4 module + reboot FIRST** (new signing key), then install v1.5 + reboot."
+            echo "- **Signing key:** if a \`VOICEFX-SIGNING-KEY-DOWNLOAD-AND-KEEP\` artifact exists on this run, download it within 7 days and keep it forever."
+          } >> "$GITHUB_STEP_SUMMARY"

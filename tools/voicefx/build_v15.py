@@ -58,9 +58,9 @@ TARGET_SMALI_PREFIX = "com/android/incallui/voicefx/VoiceFxProcessor"
 MIN_API = "26"
 
 SMALI_RELEASES = [
-    # google/smali (maintained fork). Fat jars.
-    ("https://github.com/google/smali/releases/download/3.0.9/smali-3.0.9.jar", "smali.jar"),
-    ("https://github.com/google/smali/releases/download/3.0.9/baksmali-3.0.9.jar", "baksmali.jar"),
+    # JesusFreke smali 2.5.2 — the exact version the v1.4 build used.
+    ("https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar", "smali.jar"),
+    ("https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar", "baksmali.jar"),
 ]
 
 
@@ -74,7 +74,9 @@ def die(msg: str) -> None:
 
 
 def run(cmd: list, desc: str) -> str:
-    log(f"$ {' '.join(str(c) for c in cmd)}")
+    shown = " ".join(str(c) for c in cmd)
+    shown = re.sub(r"pass:[^\s]+", "pass:********", shown)  # never log keystore passwords (CI logs are public)
+    log(f"$ {shown}")
     p = subprocess.run([str(c) for c in cmd], capture_output=True, text=True)
     if p.returncode != 0:
         die(f"{desc} failed (exit {p.returncode})\n--- stdout ---\n{p.stdout}\n--- stderr ---\n{p.stderr}")
@@ -140,7 +142,8 @@ def ensure_smali_jars(args, tools_dir: Path) -> tuple:
                 urllib.request.urlretrieve(url, dest)
             except Exception as e:  # offline / renamed release
                 die(f"Could not download {fname} ({e}).\n"
-                    f"Download smali/baksmali jars manually (https://github.com/google/smali/releases) "
+                    f"Download smali/baksmali 2.5.2 jars manually "
+                    f"(https://bitbucket.org/JesusFreke/smali/downloads/) "
                     f"and pass --smali-jar/--baksmali-jar.")
         out[key] = dest
     return out["smali"], out["baksmali"]
@@ -240,7 +243,10 @@ def main() -> int:
     ap.add_argument("--smali-jar", default=None)
     ap.add_argument("--baksmali-jar", default=None)
     ap.add_argument("--out", default=str(here / "out"))
-    ap.add_argument("--force", action="store_true", help="continue despite md5/cert mismatches")
+    ap.add_argument("--force", action="store_true", help="continue despite md5/cert/package mismatches")
+    ap.add_argument("--allow-different-cert", action="store_true",
+                    help="signing key intentionally differs from v1.4 (fresh install required: "
+                         "uninstall the old module first). Package + md5 checks stay strict.")
     args = ap.parse_args()
     args.key_pass = args.key_pass or args.ks_pass
 
@@ -369,11 +375,16 @@ def main() -> int:
     cert = m.group(1).lower() if m else "UNKNOWN"
     if cert != EXPECTED_CERT_SHA256:
         msg = f"Signing cert {cert} != v1.4 cert {EXPECTED_CERT_SHA256} — this will NOT clean-upgrade over v1.4"
-        if not args.force:
-            die(msg + ". Are you using the original axionvoice.jks? (or pass --force)")
+        if not (args.force or args.allow_different_cert):
+            die(msg + ". Are you using the original axionvoice.jks? "
+                "(or pass --allow-different-cert for an intentional fresh key)")
         log(f"WARNING: {msg}")
+        log("Install order for a fresh key: UNINSTALL the old module -> reboot -> install v1.5 -> reboot.")
+        report.append("- Signing: NEW custom key (differs from v1.4) — uninstall the old module "
+                      "and reboot BEFORE installing v1.5; keep this keystore for all future updates.")
     else:
         log("signing cert matches v1.4 — clean upgrade.")
+        report.append("- Signing: same cert as v1.4 — clean in-place upgrade.")
     report.append(f"- Signing cert SHA-256: {cert} (v1.4 match: {cert == EXPECTED_CERT_SHA256})")
 
     pkg = check_package(aapt2 if aapt2.exists() else None, signed)
