@@ -148,10 +148,15 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             # Mirror the tail of the log into annotations: the raw job log is not
             # reachable from every network, annotations are.
-            # One annotation with the tail, joined: annotations survive even
-            # though the raw job log is not reachable from every network.
-            echo "::error::build failed (exit $rc): $(tail -n 12 build.log | tr '\n' '|' | cut -c1-1800)"
-            echo "::error::earlier: $(tail -n 40 build.log | head -n -12 | tr '\n' '|' | cut -c1-1800)"
+            # Annotations are readable through the API even where the raw job
+            # log is not, so mirror the interesting lines there, one per line.
+            tail -n 80 build.log | grep -iE "error|failed|failure|exception|cannot|missing|invalid|no such" \
+              | tail -n 12 | while IFS= read -r line; do
+                echo "::error::$(printf '%.450s' "$line")"
+              done
+            tail -n 6 build.log | while IFS= read -r line; do
+              echo "::warning::tail: $(printf '%.450s' "$line")"
+            done
             exit "$rc"
           fi
           echo "--- md5 ---"
