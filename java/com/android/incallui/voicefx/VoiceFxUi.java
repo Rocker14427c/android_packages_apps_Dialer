@@ -109,10 +109,29 @@ public final class VoiceFxUi {
         .show();
   }
 
+  /**
+   * v1.4: resolve via Fragment.getContext() — in the shipped (minified) APK the
+   * androidx Fragment declares getActivity()Landroidx/fragment/app/FragmentActivity;
+   * not android.app.Activity. Using framework-typed getContext() (the host context,
+   * i.e. the Activity itself) cannot signature-mismatch against the packaged
+   * minified library.
+   */
   private static Activity resolveCallActivity(InCallButtonUi ui) {
     try {
       final Fragment f = ui.getInCallButtonUiFragment();
-      return f == null ? null : f.getActivity();
+      if (f == null) {
+        return null;
+      }
+      Context host = null;
+      try {
+        host = f.getContext();
+      } catch (Throwable ignored) {
+      }
+      final Activity act = (host instanceof Activity) ? (Activity) host : null;
+      if (act == null || act.isFinishing() || act.isDestroyed()) {
+        return null;
+      }
+      return act;
     } catch (Throwable t) {
       Log.e(TAG, "resolveCallActivity failed", t);
       return null;
