@@ -1,0 +1,15 @@
+Place the SIGNED patched APK here before zipping the module manually:
+
+    AxionVoiceDialer.apk    (package com.axionvoice.dialer, signed with axionvoice.jks)
+
+Normally you never use this template: build_v15.py reuses your original
+VoiceFX-Dialer-Module-v1.4.zip (scripts + permission XMLs byte-for-byte) and
+replaces only this APK's VoiceFxProcessor smali. This template exists only as
+a faithful reconstruction if the v1.4 zip is lost — diff every script/XML
+against a known-good module before flashing a hand-zipped build.
+
+Zip layout (module root): module.prop, customize.sh, service.sh,
+post-fs-data.sh, uninstall.sh, customize.sh canonical helper comes from the
+manager installer (Magisk/KernelSU util_functions), plus system/ as here.
+Set 755 on *.sh, 644 on the rest. Never flash a zip whose APK is unsigned or
+signed with a different key over an installed module.

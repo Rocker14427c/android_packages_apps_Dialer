@@ -1,0 +1,6 @@
+id=axionvoice_dialer
+name=VoiceFX Dialer
+version=v1.5
+versionCode=5
+author=Rocker14427c
+description=Side-by-side dialer (com.axionvoice.dialer) with realtime in-call voice changer (TD-PSOLA Girl/Agent v1.5). Stock Phone stays untouched; uninstall + reboot fully reverts.

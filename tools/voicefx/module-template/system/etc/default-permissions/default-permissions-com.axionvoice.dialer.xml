@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Default (auto-granted, fixed) runtime permissions for VoiceFX Dialer.
+     Mirrors the v1.4 module (17 grants). If you rebuild from this template,
+     diff this list against the copy inside your v1.4 zip before flashing.
+-->
+<exceptions>
+    <exception package="com.axionvoice.dialer">
+        <permission name="android.permission.READ_CONTACTS" fixed="true"/>
+        <permission name="android.permission.WRITE_CONTACTS" fixed="true"/>
+        <permission name="android.permission.READ_CALL_LOG" fixed="true"/>
+        <permission name="android.permission.WRITE_CALL_LOG" fixed="true"/>
+        <permission name="android.permission.CALL_PHONE" fixed="true"/>
+        <permission name="android.permission.READ_PHONE_STATE" fixed="true"/>
+        <permission name="android.permission.RECORD_AUDIO" fixed="true"/>
+        <permission name="android.permission.CAMERA" fixed="true"/>
+        <permission name="android.permission.GET_ACCOUNTS" fixed="true"/>
+        <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="true"/>
+        <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="true"/>
+        <permission name="android.permission.RECEIVE_SMS" fixed="true"/>
+        <permission name="android.permission.SEND_SMS" fixed="true"/>
+        <permission name="android.permission.POST_NOTIFICATIONS" fixed="true"/>
+        <permission name="android.permission.BLUETOOTH_CONNECT" fixed="true"/>
+        <permission name="com.android.voicemail.permission.ADD_VOICEMAIL" fixed="true"/>
+        <permission name="com.android.voicemail.permission.READ_VOICEMAIL" fixed="true"/>
+    </exception>
+</exceptions>
