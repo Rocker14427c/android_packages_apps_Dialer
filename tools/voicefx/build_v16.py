@@ -517,14 +517,20 @@ def main() -> int:
     new_smali = work / "new_smali"
     disassemble(java, baksmali_jar, new_dex_dir / "classes.dex", new_smali, "--skip-debug")
 
+    compiled = sorted(p.relative_to(classes).as_posix()[:-len(".class")]
+                      for p in classes.rglob("*.class"))
     new_classes = sorted(index_classes(new_smali))
+    lost = [c for c in compiled if c not in new_classes]
+    if lost:
+        die("classes disappeared between javac and the disassembled dex: %s\n"
+            "  compiled: %s\n  in dex  : %s" % (lost, compiled, new_classes))
     stray = [c for c in new_classes if not c.startswith(ALLOWED_PREFIXES)]
     if stray:
         die(f"classes outside the patch whitelist: {stray}")
     for prefix in REPLACE_PREFIXES:
         if not any(c.startswith(prefix) for c in new_classes):
-            die(f"no compiled class for {prefix}")
-    log(f"{len(new_classes)} new smali classes")
+            die(f"no compiled class for {prefix} (dex has: {new_classes})")
+    log(f"{len(new_classes)} new smali classes: {new_classes}")
 
     # ---- ABI gate --------------------------------------------------------
     refs, types = references_of(new_smali)
