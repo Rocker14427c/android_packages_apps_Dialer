@@ -41,7 +41,6 @@ import sys
 import tempfile
 import time
 import urllib.request
-import fnmatch
 import zipfile
 from pathlib import Path
 
@@ -79,12 +78,12 @@ SHIP_SOURCES = (
 # module are the authoritative grant lists.
 MODULE_SCRIPTS = ("customize.sh", "service.sh", "uninstall.sh", "gate.sh", "post-fs-data.sh")
 MODULE_FILES = ("module.prop",) + MODULE_SCRIPTS
-# Globs that must match something inside the packaged module. The permission
-# XMLs are taken from the base module as-is, so their exact names are whatever
-# that module used; only their presence matters here.
-MODULE_PATTERNS = (
-    "system/etc/permissions/*.xml",
-    "system/etc/default-permissions/*.xml",
+# The permission XMLs are taken from the base module as-is, so their exact names
+# and partition are whatever that module used (system/etc or system/product/etc
+# depending on where the APK lives). Only their presence matters here.
+MODULE_PERMISSION_RES = (
+    re.compile(r"^system/(?:[^/]+/)*etc/permissions/[^/]+\.xml$"),
+    re.compile(r"^system/(?:[^/]+/)*etc/default-permissions/[^/]+\.xml$"),
 )
 
 SMALI_MIRRORS = [
@@ -683,9 +682,11 @@ def main() -> int:
     for f in MODULE_FILES:
         if not (mod / f).exists():
             die(f"module is missing {f}")
-    for pattern in MODULE_PATTERNS:
-        if not list(mod.glob(pattern)):
-            die(f"the base module has nothing matching {pattern}; check its layout")
+    mod_rels = sorted(p.relative_to(mod).as_posix() for p in mod.rglob("*.xml"))
+    for rx in MODULE_PERMISSION_RES:
+        if not any(rx.match(rel) for rel in mod_rels):
+            die(f"the base module has nothing matching {rx.pattern}; "
+                f"its XML files are {mod_rels}")
 
     apk_rel = apk_path.relative_to(mod).as_posix()
     out_zip = out_dir / f"VoiceFX-Dialer-Module-{version}.zip"
@@ -707,9 +708,9 @@ def main() -> int:
                 die(f"{required} missing from the module zip")
         if apk_rel not in names:
             die(f"{apk_rel} missing from the module zip")
-        for pattern in MODULE_PATTERNS:
-            if not any(fnmatch.fnmatch(n, pattern) for n in names):
-                die(f"nothing in the module zip matches {pattern}")
+        for rx in MODULE_PERMISSION_RES:
+            if not any(rx.match(n) for n in names):
+                die(f"nothing in the module zip matches {rx.pattern}")
         if any(n.startswith("/") or ".." in n for n in names):
             die("module zip has unsafe paths")
         if f"version={version}" not in z.read("module.prop").decode():

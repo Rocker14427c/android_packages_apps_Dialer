@@ -168,7 +168,7 @@ jobs:
       - name: Verify the module zip independently
         run: |
           python3 - <<'EOF'
-          import hashlib, zipfile, sys
+          import hashlib, re, zipfile, sys
           z = zipfile.ZipFile("out/VoiceFX-Dialer-Module-v1.6.zip")
           names = z.namelist()
           assert "module.prop" in names, "module.prop missing"
@@ -180,10 +180,11 @@ jobs:
           for n in ("customize.sh", "service.sh", "uninstall.sh", "gate.sh", "post-fs-data.sh"):
               assert n in names, n + " missing"
               assert (z.getinfo(n).external_attr >> 16) & 0o111, n + " not executable"
-          assert any(n.startswith("system/etc/permissions/") and n.endswith(".xml") for n in names), \
-              "no privapp permission allowlist"
-          assert any(n.startswith("system/etc/default-permissions/") and n.endswith(".xml")
-                     for n in names), "no default-permissions allowlist"
+          perm = re.compile(r"^system/(?:[^/]+/)*etc/permissions/[^/]+\.xml$")
+          dperm = re.compile(r"^system/(?:[^/]+/)*etc/default-permissions/[^/]+\.xml$")
+          assert any(perm.match(n) for n in names), "no privapp permission allowlist"
+          assert any(dperm.match(n) for n in names), "no default-permissions allowlist"
+          print("permission XMLs:", [n for n in names if perm.match(n) or dperm.match(n)])
           prop = z.read("module.prop").decode()
           assert "version=v1.6" in prop and "id=axionvoice_dialer" in prop, prop
           for n in names:
