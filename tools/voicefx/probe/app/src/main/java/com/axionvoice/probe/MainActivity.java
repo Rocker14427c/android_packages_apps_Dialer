@@ -43,7 +43,7 @@ import rikka.shizuku.Shizuku;
 public class MainActivity extends Activity {
   private static final int REQ_ROLE = 2;
   private static final int REQ_PERMS = 3;
-  private static final int PROBE_VERSION = 1;
+  private static final int PROBE_VERSION = 2;
   private static final int LOG_MAX = 80000;
 
   private final Handler main = new Handler(Looper.getMainLooper());

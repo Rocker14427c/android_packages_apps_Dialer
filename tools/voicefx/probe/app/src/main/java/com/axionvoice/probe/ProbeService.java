@@ -11,8 +11,10 @@ import android.media.MediaRecorder;
 import android.os.Build;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -280,34 +282,83 @@ public class ProbeService extends IProbeService.Stub {
   }
 
   private AudioRecord openRecord(int source) {
+    int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT);
+    // First: attributed to the shell package. Second: default attribution (diagnostic).
+    AudioRecord r = buildRecord(source, min, true);
+    if (r == null) {
+      r = buildRecord(source, min, false);
+    }
+    return r;
+  }
+
+  private AudioRecord buildRecord(int source, int min, boolean withShellContext) {
+    String how = withShellContext ? "shell-ctx" : "default-ctx";
     try {
-      int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO,
-          AudioFormat.ENCODING_PCM_16BIT);
-      AudioRecord r = new AudioRecord.Builder()
+      AudioRecord.Builder b = new AudioRecord.Builder()
           .setAudioSource(source)
           .setAudioFormat(new AudioFormat.Builder()
               .setSampleRate(RATE)
               .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
               .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
               .build())
-          .setBufferSizeInBytes(Math.max(min, FRAME * 2 * 8))
-          .setContext(context)
-          .build();
-      line("OPEN source=" + srcName(source) + " state=" + r.getState() + " minBuf=" + min);
+          .setBufferSizeInBytes(Math.max(min, FRAME * 2 * 8));
+      if (withShellContext) {
+        b.setContext(context);
+      }
+      AudioRecord r = b.build();
+      line("OPEN(" + how + ") source=" + srcName(source) + " state=" + r.getState()
+          + " minBuf=" + min);
       if (r.getState() != AudioRecord.STATE_INITIALIZED) {
         r.release();
-        line("OPEN failed: AudioRecord not initialised for " + srcName(source));
+        line("OPEN(" + how + ") failed: not initialised for " + srcName(source));
         return null;
       }
       r.startRecording();
-      line("OPEN recordingState=" + r.getRecordingState() + " (3 = RECORDING)");
+      line("OPEN(" + how + ") recordingState=" + r.getRecordingState() + " (3 = RECORDING)");
       line("ROUTE capture device=" + describe(r.getRoutedDevice()));
       return r;
     } catch (Exception e) {
-      line("OPEN exception source=" + srcName(source) + ": " + e);
+      line("OPEN(" + how + ") exception source=" + srcName(source) + ": " + e + causeOf(e));
+      dumpAudioLogs();
       return null;
     }
   }
+
+  private static String causeOf(Throwable e) {
+    return e.getCause() != null ? " cause=" + e.getCause() : "";
+  }
+
+  /**
+   * The native reason for a failed AudioRecord/AudioTrack is only written to logcat
+   * ("Error code N when initializing native AudioRecord object"). The shell identity may
+   * read logcat, so pull the audio lines once into the probe log.
+   */
+  private void dumpAudioLogs() {
+    if (logcatDumped) {
+      return;
+    }
+    logcatDumped = true;
+    try {
+      Process p = new ProcessBuilder("logcat", "-d", "-t", "400", "*:W")
+          .redirectErrorStream(true).start();
+      BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+      String s;
+      int n = 0;
+      while (n < 60 && (s = br.readLine()) != null) {
+        if (s.contains("Audio") || s.contains("APM") || s.contains("Permission")
+            || s.contains("AppOps") || s.contains("Denial")) {
+          line("LOGCAT " + s);
+          n++;
+        }
+      }
+      line("LOGCAT dump done (" + n + " lines)");
+      p.destroy();
+    } catch (Exception e) {
+      line("LOGCAT unavailable: " + e);
+    }
+  }
+  private boolean logcatDumped = false;
 
   // ---------------------------------------------------------------- tone
 
@@ -363,7 +414,8 @@ public class ProbeService extends IProbeService.Stub {
       }
       line("TONE done frames=" + written + " routed=" + describe(t.getRoutedDevice()));
     } catch (Exception e) {
-      line("TONE error: " + e);
+      line("TONE error: " + e + causeOf(e));
+      dumpAudioLogs();
     } finally {
       if (t != null) {
         try {
