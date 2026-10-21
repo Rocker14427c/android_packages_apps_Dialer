@@ -15,6 +15,12 @@ name: Build VoiceFX v1.5 module
 #    from the run page immediately and keep it safe forever.
 
 on:
+  # Tag trigger: runs the workflow as defined on the tagged commit's branch
+  # (workflow_dispatch alone only works once this file reaches the default
+  # branch). Push tags like voicefx-build-1, voicefx-build-2, ... to build.
+  push:
+    tags:
+      - "voicefx-build-*"
   workflow_dispatch:
     inputs:
       publish_release:
@@ -166,7 +172,7 @@ jobs:
           retention-days: 7
 
       - name: Publish GitHub Release v1.5
-        if: ${{ inputs.publish_release }}
+        if: ${{ github.event_name == 'push' || inputs.publish_release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
