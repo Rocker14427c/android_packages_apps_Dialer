@@ -520,6 +520,11 @@ def main() -> int:
     compiled = sorted(p.relative_to(classes).as_posix()[:-len(".class")]
                       for p in classes.rglob("*.class"))
     new_classes = sorted(index_classes(new_smali))
+    if not new_classes:
+        listing = sorted(p.relative_to(work).as_posix()
+                         for p in work.rglob("*") if p.name.endswith((".dex", ".smali")))
+        die("baksmali produced no smali under %s; dex/smali files in the work dir: %s"
+            % (new_smali, listing[:40] or "none"))
     lost = [c for c in compiled if c not in new_classes]
     if lost:
         die("classes disappeared between javac and the disassembled dex: %s\n"
