@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import fnmatch
 import zipfile
@@ -87,12 +88,14 @@ MODULE_PATTERNS = (
 )
 
 SMALI_MIRRORS = [
+    # Bitbucket is where JesusFreke publishes the runnable fat jars; this is the
+    # exact toolchain the v1.4/v1.5 modules were built with.
+    ("smali/baksmali 2.5.2 (Bitbucket)",
+     "https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar",
+     "https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar"),
     ("smali/baksmali 2.5.2 (Maven Central)",
      "https://repo1.maven.org/maven2/org/smali/smali/2.5.2/smali-2.5.2.jar",
      "https://repo1.maven.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar"),
-    ("smali/baksmali 2.5.2 (Bitbucket — the v1.4 toolchain)",
-     "https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar",
-     "https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar"),
     ("smali/baksmali 3.0.9 (Maven Central)",
      "https://repo1.maven.org/maven2/com/android/tools/smali/smali/3.0.9/smali-3.0.9.jar",
      "https://repo1.maven.org/maven2/com/android/tools/smali/baksmali/3.0.9/baksmali-3.0.9.jar"),
@@ -188,12 +191,25 @@ def download(url: str, dest: Path) -> bool:
         return False
 
 
-def jar_works(java: str, jar: Path) -> bool:
+def jar_works(jar: Path, kind: str) -> bool:
+    """True only for a runnable fat jar.
+
+    Maven Central also serves org.smali:* — but those are *libraries* without a
+    Main-Class, so `java -jar` cannot run them. Checking the manifest is the
+    only reliable way to tell the two apart before trying to use them.
+    """
     try:
-        p = subprocess.run([java, "-jar", str(jar), "--version"], capture_output=True, text=True)
-        return p.returncode == 0 or "smali" in (p.stdout + p.stderr).lower()
+        with zipfile.ZipFile(jar) as z:
+            manifest = z.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
     except Exception:  # noqa: BLE001
         return False
+    m = re.search(r"^Main-Class:\s*(\S+)\s*$", manifest, re.MULTILINE)
+    if not m:
+        return False
+    main = m.group(1)
+    if kind == "baksmali":
+        return "baksmali" in main
+    return "smali" in main
 
 
 def pick_tools(java: str, args, cache: Path, probe_dex: Path):
@@ -204,22 +220,40 @@ def pick_tools(java: str, args, cache: Path, probe_dex: Path):
     otherwise blow up halfway through the build.
     """
     if args.smali_jar and args.baksmali_jar:
-        return Path(args.smali_jar), Path(args.baksmali_jar)
+        sm, bk = Path(args.smali_jar), Path(args.baksmali_jar)
+        for jar, kind in ((sm, "smali"), (bk, "baksmali")):
+            if not jar.exists():
+                die(f"{jar} does not exist")
+            if not jar_works(jar, kind):
+                die(f"{jar} is not a runnable {kind} jar (no Main-Class in its manifest). "
+                    "Use the Bitbucket fat jar, not the Maven Central library artifact.")
+        return sm, bk
     cache.mkdir(parents=True, exist_ok=True)
     problems = []
     for label, smali_url, baksmali_url in SMALI_MIRRORS:
-        s, b = cache / "smali.jar", cache / "baksmali.jar"
+        # one cache slot per mirror: a jar that failed the probe must never be
+        # silently reused for the next mirror
+        slot = cache / re.sub(r"[^a-z0-9]+", "-", label.lower())
+        slot.mkdir(parents=True, exist_ok=True)
+        s, b = slot / "smali.jar", slot / "baksmali.jar"
         ok = True
-        for jar, url in ((s, smali_url), (b, baksmali_url)):
-            if jar.exists() and jar_works(java, jar):
+        for jar, url, kind in ((s, smali_url, "smali"), (b, baksmali_url, "baksmali")):
+            if jar.exists() and jar_works(jar, kind):
                 continue
-            if not download(url, jar) or not jar_works(java, jar):
+            got = False
+            for attempt in range(1, 4):
+                if download(url, jar) and jar_works(jar, kind):
+                    got = True
+                    break
+                log(f"  attempt {attempt} for {jar.name} failed")
+                time.sleep(3 * attempt)
+            if not got:
+                problems.append(f"{label}: {kind} jar")
                 ok = False
                 break
         if not ok:
-            problems.append(f"{label}: download")
             continue
-        probe = cache / "probe_smali"
+        probe = slot / "probe_smali"
         if probe.exists():
             shutil.rmtree(probe)
         probe.mkdir()
