@@ -55,9 +55,15 @@ jobs:
       - name: Show Android SDK toolchain
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/build-tools" || true
-          ls "$ANDROID_HOME/platforms" || true
-          "$ANDROID_HOME"/build-tools/*/d8 --version || true
+          echo "build-tools: $(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
+          echo "platforms: $(ls "$ANDROID_HOME/platforms" | tr '\n' ' ')"
+          echo "java: $(java -version 2>&1 | head -1)"
+          echo "javac: $(javac -version 2>&1)"
+          # annotations are the only log channel that can be read back through
+          # the API from outside, so surface the toolchain there too
+          echo "::notice::sdk build-tools: $(ls "$ANDROID_HOME/build-tools" | tr '\n' ' ')"
+          echo "::notice::sdk platforms: $(ls "$ANDROID_HOME/platforms" | tr '\n' ' ')"
+          echo "::notice::javac: $(javac -version 2>&1)"
 
       # ---- gate 1: the voice engine itself -------------------------------
       - name: Run the voice-engine regression suite
@@ -130,17 +136,28 @@ jobs:
       # ---- gate 2-4: patch, sign, package, verify ------------------------
       - name: Build the v1.6 module
         run: |
+          set +e
           python3 tools/voicefx/build_v16.py \
             --v14-zip base/VoiceFX-Dialer-Module-v1.4.zip \
             --keystore "$RUNNER_TEMP/signing/voicefx-release.jks" \
             --ks-pass "$KS_PASS" \
             --ks-alias voicefx \
             --allow-different-cert \
-            --out out
+            --out out 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            # Mirror the tail of the log into annotations: the raw job log is not
+            # reachable from every network, annotations are.
+            tail -n 30 build.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$(printf '%.700s' "$line")"
+            done
+            exit "$rc"
+          fi
           echo "--- md5 ---"
           cat out/md5.txt
           echo "--- report ---"
           cat out/BUILD_REPORT_V16.md
+          echo "::notice::$(grep -E 'md5|Signing|ABI gate' out/BUILD_REPORT_V16.md | tr '\n' ' ' | cut -c1-900)"
 
       - name: Verify the module zip independently
         run: |
