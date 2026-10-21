@@ -431,7 +431,7 @@ def main() -> int:
         + f"- APK sha256: {sha256_of_file(signed)}\n\n"
         ("Install per the Signing note above (fresh key = uninstall old module + "
          "reboot first; same key = flash over). Uninstall (manager) + reboot fully "
-         "restores stock, exactly as in v1.4 (scripts reused unchanged).\n")
+         "restores stock, exactly as in v1.4 (scripts reused unchanged).\n"))
     (out_dir / "BUILD_REPORT_V15.md").write_text(report_text)
 
     log(f"DONE: {out_zip}")
