@@ -101,7 +101,7 @@ jobs:
             "$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt 2>/dev/null || true
           fi
           if [ -s manifest.txt ]; then
-            for k in "ProbeInCallService" "ShizukuProvider" "BIND_INCALL_SERVICE" "IN_CALL_SERVICE_UI" "android.telecom.InCallService"; do
+            for k in "ProbeInCallService" "ShizukuProvider" "BIND_INCALL_SERVICE" "IN_CALL_SERVICE_UI" "android.telecom.InCallService" "android.intent.action.DIAL"; do
               if grep -q "$k" manifest.txt; then echo "::notice::manifest has $k"; else echo "::error::manifest missing $k"; exit 1; fi
             done
           else

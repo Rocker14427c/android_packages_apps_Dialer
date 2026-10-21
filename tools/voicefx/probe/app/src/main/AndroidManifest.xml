@@ -22,6 +22,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- The dialer role (RoleManager.ROLE_DIALER) is only offered to apps that handle DIAL.
+                 Without these filters the role dialog never appears (Permission module roles.xml). -->
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="tel" />
+            </intent-filter>
         </activity>
 
         <!-- Shizuku hands its binder to the app through this provider (required; per Shizuku-API README). -->

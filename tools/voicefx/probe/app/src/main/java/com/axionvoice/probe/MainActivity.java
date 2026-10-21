@@ -358,6 +358,8 @@ public class MainActivity extends Activity {
               new ComponentName(getPackageName(), ProbeService.class.getName()))
           .daemon(false)
           .tag("axionvoice-probe")
+          // Required by Shizuku 13.x (it throws NPE without it); process becomes com.axionvoice.probe:probe.
+          .processNameSuffix("probe")
           .version(PROBE_VERSION)
           .debuggable(false);
       Shizuku.bindUserService(serviceArgs, connection);
