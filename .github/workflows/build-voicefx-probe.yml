@@ -109,8 +109,10 @@ jobs:
           fi
           "$BT/aapt2" dump badging "$APK" | grep -E "^package" | sed 's/^/::notice::/'
           mkdir -p out
-          cp "$APK" out/AxionVoiceProbe.apk
-          (cd out && sha256sum AxionVoiceProbe.apk > SHA256SUMS.txt)
+          # Unique file name per build, so an old download is never mistaken for a new one.
+          SHORT="${GITHUB_SHA:0:7}"
+          cp "$APK" "out/AxionVoiceProbe-$SHORT.apk"
+          (cd out && sha256sum "AxionVoiceProbe-$SHORT.apk" > SHA256SUMS.txt)
           cat out/SHA256SUMS.txt
           echo "::notice::probe APK $(cat out/SHA256SUMS.txt | cut -c1-16)… signed with: $SIGNING"
 
@@ -129,7 +131,7 @@ jobs:
           set -e
           TAG=probe-v1-shizuku
           cat > "$RUNNER_TEMP/notes.md" <<NOTES
-          ## AxionVoice Probe v1 (Shizuku diagnostic, pre-release)
+          ## AxionVoice Probe (Shizuku diagnostic, pre-release)
 
           A plain APK (no root, no system install) that tests the two call features on
           your own phone: call-audio capture, the Dialer's InCallService mute, the telephony
@@ -140,20 +142,23 @@ jobs:
 
           Full test plan: tools/voicefx/probe/README.md in the repository.
 
+          Build: commit ${GITHUB_SHA:0:7}. The file name is AxionVoiceProbe-${GITHUB_SHA:0:7}.apk; install only the newest build.
           Signing: $SIGNING.
           SHA-256: \`$(cut -d' ' -f1 out/SHA256SUMS.txt)\`
           NOTES
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/AxionVoiceProbe.apk out/SHA256SUMS.txt
+            # Remove the old generic-name asset so nobody downloads a stale build by mistake.
+            gh release delete-asset "$TAG" AxionVoiceProbe.apk --repo "$GITHUB_REPOSITORY" --yes || true
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/AxionVoiceProbe-*.apk out/SHA256SUMS.txt
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease \
-              --title "AxionVoice Probe v1 - Shizuku diagnostic (pre-release)" \
+              --title "AxionVoice Probe - Shizuku diagnostic (pre-release)" \
               --notes-file "$RUNNER_TEMP/notes.md"
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --prerelease \
-              --title "AxionVoice Probe v1 - Shizuku diagnostic (pre-release)" \
+              --title "AxionVoice Probe - Shizuku diagnostic (pre-release)" \
               --notes-file "$RUNNER_TEMP/notes.md" \
-              out/AxionVoiceProbe.apk out/SHA256SUMS.txt
+              out/AxionVoiceProbe-*.apk out/SHA256SUMS.txt
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url
 
