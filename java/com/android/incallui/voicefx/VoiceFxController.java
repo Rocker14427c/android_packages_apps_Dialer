@@ -63,10 +63,37 @@ public final class VoiceFxController {
   private static final int SAMPLE_RATE = 48000;
   private static final int CHUNK_FRAMES = SAMPLE_RATE / 100; // 10 ms slices
   private static final String WAKELOCK_TAG = "dialer:voicefx";
+  /** Where the speaker's measured register is remembered between calls. */
+  private static final String PREFS_NAME = "voice_changer";
+  private static final String KEY_MEDIAN_F0 = "median_f0_hz";
   private static final long WAKELOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000L; // 4 h cap
 
   private static VoiceFxController instance;
   private static Context appContext;
+
+  /**
+   * Reads the speaker's own register (median F0, in Hz) measured during an earlier call.
+   *
+   * <p>It is stored per device rather than per preset because it is a property of the person, not
+   * of the voice they picked: every preset derives its own offset from it.
+   */
+  private static float loadMedianF0(Context context) {
+    if (context == null) {
+      return 0f;
+    }
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .getFloat(KEY_MEDIAN_F0, 0f);
+  }
+
+  private static void saveMedianF0(Context context, float hz) {
+    if (context == null || !(hz > 60f && hz < 500f)) {
+      return; // not a plausible speaking fundamental: keep the previous value
+    }
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putFloat(KEY_MEDIAN_F0, hz)
+        .apply();
+  }
 
   public static synchronized VoiceFxController get() {
     if (instance == null) {
@@ -166,6 +193,7 @@ public final class VoiceFxController {
       Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
 
       String failure = null;
+      VoiceFxProcessor processor = null;
       AudioRecord record = null;
       AudioTrack track = null;
       PowerManager.WakeLock wakeLock = null;
@@ -226,7 +254,15 @@ public final class VoiceFxController {
           throw new Exception("Failed to route to telephony output device");
         }
 
-        final VoiceFxProcessor processor = new VoiceFxProcessor(SAMPLE_RATE);
+        processor = new VoiceFxProcessor(SAMPLE_RATE);
+        // Seed the pitch offset with the register remembered from a previous call, so the first
+        // seconds of this call are already in the right octave instead of gliding there.
+        final VoiceFxPreset voice = VoiceFxPreset.forId(preset);
+        final float rememberedHz = loadMedianF0(context);
+        if (voice != null && voice.targetF0Hz > 0f && rememberedHz > 0f) {
+          processor.setPitchHint(
+              (float) (12.0 * Math.log(rememberedHz / voice.targetF0Hz) / Math.log(2.0)));
+        }
         processor.setPreset(preset);
 
         final PowerManager pm = context.getSystemService(PowerManager.class);
@@ -256,6 +292,9 @@ public final class VoiceFxController {
           failure = e.getLocalizedMessage();
         }
       } finally {
+        if (processor != null) {
+          saveMedianF0(context, processor.getDetectedF0Hz());
+        }
         try { if (record != null) record.stop(); } catch (Throwable ignored) {}
         try { if (track != null) track.stop(); } catch (Throwable ignored) {}
         if (track != null) track.release();
