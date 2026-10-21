@@ -1,0 +1,5 @@
+// Top-level build file. The probe is a standalone Gradle project: it is not part
+// of the AOSP Soong build (Android.bp at the repo root never references it).
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

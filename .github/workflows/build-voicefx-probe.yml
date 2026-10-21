@@ -1,0 +1,157 @@
+name: Build AxionVoice Probe (Shizuku diagnostic APK)
+
+# Builds tools/voicefx/probe: a plain, non-root, non-system APK that runs the
+# call-audio tests through Shizuku (ADB shell privileges). Published as a
+# pre-release so it never replaces the Latest module release.
+#
+# Trigger: push a tag named voicefx-probe-*  (workflow_dispatch works only once this
+# file exists on the default branch).
+#
+# Signing: repo secrets PROBE_KS_B64 (base64 of a .jks) and PROBE_KS_PASS keep ONE key
+# across builds (updates install in place). Without them a key is generated for the run.
+
+on:
+  push:
+    tags:
+      - "voicefx-probe-*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish/refresh the probe GitHub pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: voicefx-probe
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install Android platform and build-tools
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(command -v sdkmanager)"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+
+      - name: Prepare the signing key
+        env:
+          PROBE_KS_B64: ${{ secrets.PROBE_KS_B64 }}
+          PROBE_KS_PASS: ${{ secrets.PROBE_KS_PASS }}
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/signing"
+          if [ -n "$PROBE_KS_B64" ] && [ -n "$PROBE_KS_PASS" ]; then
+            echo "$PROBE_KS_B64" | base64 -d > "$RUNNER_TEMP/signing/probe.jks"
+            KS_PASS="$PROBE_KS_PASS"
+            SIGNING="repository key (secrets)"
+          else
+            KS_PASS=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 24)
+            echo "::add-mask::$KS_PASS"
+            keytool -genkeypair -keystore "$RUNNER_TEMP/signing/probe.jks" -alias probe \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=AxionVoice Probe, O=Rocker14427c, L=Patna, ST=Bihar, C=IN"
+            SIGNING="key generated for this run (uninstall the old probe before installing this one)"
+          fi
+          echo "PROBE_KS=$RUNNER_TEMP/signing/probe.jks" >> "$GITHUB_ENV"
+          echo "PROBE_KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
+          echo "PROBE_KEY_ALIAS=probe" >> "$GITHUB_ENV"
+          echo "SIGNING=$SIGNING" >> "$GITHUB_ENV"
+          echo "Signing: $SIGNING"
+
+      - name: Build the release APK
+        working-directory: tools/voicefx/probe
+        run: gradle --no-daemon :app:assembleRelease
+
+      - name: Verify and collect the APK
+        run: |
+          set -e
+          APK=tools/voicefx/probe/app/build/outputs/apk/release/app-release.apk
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          test -s "$APK"
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package|sdkVersion|uses-permission" | head -20
+          "$BT/apksigner" verify --print-certs "$APK" | head -3
+          unzip -l "$APK" | grep -q "classes.dex" || { echo "no dex in APK"; exit 1; }
+          unzip -p "$APK" AndroidManifest.xml > /dev/null
+          mkdir -p out
+          cp "$APK" out/AxionVoiceProbe.apk
+          (cd out && sha256sum AxionVoiceProbe.apk > SHA256SUMS.txt)
+          cat out/SHA256SUMS.txt
+          echo "::notice::probe APK $(cat out/SHA256SUMS.txt | cut -c1-16)… signed with: $SIGNING"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AxionVoiceProbe
+          path: out/
+          retention-days: 30
+
+      - name: Publish the pre-release
+        if: ${{ github.event_name == 'push' || inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG=probe-v1-shizuku
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          ## AxionVoice Probe v1 (Shizuku diagnostic, pre-release)
+
+          A plain APK (no root, no system install) that tests the two call features on
+          your own phone: call-audio capture, the Dialer's InCallService mute, the telephony
+          output route (voice-changer path) and a 10 s call-audio recording.
+
+          Requires: Android 13+, Shizuku 13.x running (Wireless debugging), and the
+          probe made the default phone app for the mute test.
+
+          Full test plan: tools/voicefx/probe/README.md in the repository.
+
+          Signing: $SIGNING.
+          SHA-256: \`$(cut -d' ' -f1 out/SHA256SUMS.txt)\`
+          NOTES
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber out/AxionVoiceProbe.apk out/SHA256SUMS.txt
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease \
+              --title "AxionVoice Probe v1 - Shizuku diagnostic (pre-release)" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "AxionVoice Probe v1 - Shizuku diagnostic (pre-release)" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              out/AxionVoiceProbe.apk out/SHA256SUMS.txt
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## AxionVoice Probe"
+            echo ""
+            [ -f out/SHA256SUMS.txt ] && cat out/SHA256SUMS.txt
+            echo ""
+            echo "- signing: ${SIGNING:-n/a}"
+            echo "- module: tools/voicefx/probe (Gradle, Shizuku API 13.1.5)"
+          } >> "$GITHUB_STEP_SUMMARY"

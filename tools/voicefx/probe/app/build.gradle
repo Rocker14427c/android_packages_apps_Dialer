@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Environment variables used by CI (and locally, if you want a stable key):
+//   PROBE_KS        absolute path to a .jks keystore (optional)
+//   PROBE_KS_PASS   keystore + key password
+//   PROBE_KEY_ALIAS key alias (default: probe)
+// Without PROBE_KS the release build is signed with the debug key so it still installs.
+def probeKs = System.getenv('PROBE_KS')
+
+android {
+    namespace 'com.axionvoice.probe'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.axionvoice.probe'
+        minSdk 33
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0-probe'
+    }
+
+    buildFeatures {
+        aidl true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        if (probeKs) {
+            release {
+                storeFile file(probeKs)
+                storePassword System.getenv('PROBE_KS_PASS')
+                keyAlias System.getenv('PROBE_KEY_ALIAS') ?: 'probe'
+                keyPassword System.getenv('PROBE_KS_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // No shrinking: the probe must run exactly the code it was tested with,
+            // and Shizuku instantiates ProbeService by reflection.
+            minifyEnabled false
+            shrinkResources false
+            signingConfig probeKs ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+}
+
+dependencies {
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+}
