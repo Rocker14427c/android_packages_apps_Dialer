@@ -525,7 +525,10 @@ def main() -> int:
     run([d8, "--min-api", "26", "--lib", str(android_jar), "--output", str(new_dex_dir)]
         + sorted(str(p) for p in classes.rglob("*.class")), "d8")
     new_smali = work / "new_smali"
-    disassemble(java, baksmali_jar, new_dex_dir / "classes.dex", new_smali, "--skip-debug")
+    # No extra flags here: baksmali 2.5.2 mis-parses "--skip-debug <dex>" as two
+    # input files and then exits 0 after printing usage ("Too many files
+    # specified"), so the plain form is the one that actually disassembles.
+    disassemble(java, baksmali_jar, new_dex_dir / "classes.dex", new_smali)
 
     compiled = sorted(p.relative_to(classes).as_posix()[:-len(".class")]
                       for p in classes.rglob("*.class"))
