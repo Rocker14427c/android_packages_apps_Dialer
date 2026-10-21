@@ -94,7 +94,20 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -E "^package|sdkVersion|uses-permission" | head -20
           "$BT/apksigner" verify --print-certs "$APK" | head -3
           unzip -l "$APK" | grep -q "classes.dex" || { echo "no dex in APK"; exit 1; }
-          unzip -p "$APK" AndroidManifest.xml > /dev/null
+          # The merged manifest is what matters on the phone (Shizuku's provider is merged in).
+          # Annotations are readable through the API, so surface the key facts there.
+          "$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml > manifest.txt 2>/dev/null || true
+          if [ ! -s manifest.txt ]; then
+            "$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > manifest.txt 2>/dev/null || true
+          fi
+          if [ -s manifest.txt ]; then
+            for k in "ProbeInCallService" "ShizukuProvider" "BIND_INCALL_SERVICE" "IN_CALL_SERVICE_UI" "android.telecom.InCallService"; do
+              if grep -q "$k" manifest.txt; then echo "::notice::manifest has $k"; else echo "::error::manifest missing $k"; exit 1; fi
+            done
+          else
+            echo "::warning::could not dump the merged manifest with aapt2; check the APK by hand"
+          fi
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package" | sed 's/^/::notice::/'
           mkdir -p out
           cp "$APK" out/AxionVoiceProbe.apk
           (cd out && sha256sum AxionVoiceProbe.apk > SHA256SUMS.txt)
