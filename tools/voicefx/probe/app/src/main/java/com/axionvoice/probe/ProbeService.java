@@ -1,6 +1,8 @@
 package com.axionvoice.probe;
 
+import android.content.AttributionSource;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
@@ -70,16 +72,35 @@ public class ProbeService extends IProbeService.Stub {
   }
 
   /**
-   * Audio services check that the package name belongs to the calling uid. Shizuku's default
-   * context carries this app's package, which would not match uid 2000. The shell package is
-   * special-cased by AppOps, so attribute all audio calls to it.
+   * AudioRecord and AudioTrack take their attribution from Context.getAttributionSource(). A
+   * context made with createPackageContext keeps this app's package there, and AudioFlinger
+   * rejects uid 2000 with that package ("invalid attr", from the AudioFlinger log). For the
+   * shell uid the only accepted package is com.android.shell, so report that package.
    */
   private static Context shellContext(Context base) {
+    Context shell;
     try {
-      return base.createPackageContext("com.android.shell", 0);
+      shell = base.createPackageContext("com.android.shell", 0);
     } catch (Exception e) {
       Log.w(TAG, "could not create shell context, using service context", e);
-      return base;
+      shell = base;
+    }
+    return new ShellAttributionContext(shell);
+  }
+
+  private static final class ShellAttributionContext extends ContextWrapper {
+    private final AttributionSource attribution;
+
+    ShellAttributionContext(Context base) {
+      super(base);
+      attribution = new AttributionSource.Builder(android.system.Os.getuid())
+          .setPid(android.system.Os.getpid())
+          .setPackageName("com.android.shell")
+          .build();
+    }
+
+    public AttributionSource getAttributionSource() {
+      return attribution;
     }
   }
 
@@ -284,42 +305,29 @@ public class ProbeService extends IProbeService.Stub {
   private AudioRecord openRecord(int source) {
     int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT);
-    // First: attributed to the shell package. Second: default attribution (diagnostic).
-    AudioRecord r = buildRecord(source, min, true);
-    if (r == null) {
-      r = buildRecord(source, min, false);
-    }
-    return r;
-  }
-
-  private AudioRecord buildRecord(int source, int min, boolean withShellContext) {
-    String how = withShellContext ? "shell-ctx" : "default-ctx";
     try {
-      AudioRecord.Builder b = new AudioRecord.Builder()
+      AudioRecord r = new AudioRecord.Builder()
           .setAudioSource(source)
           .setAudioFormat(new AudioFormat.Builder()
               .setSampleRate(RATE)
               .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
               .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
               .build())
-          .setBufferSizeInBytes(Math.max(min, FRAME * 2 * 8));
-      if (withShellContext) {
-        b.setContext(context);
-      }
-      AudioRecord r = b.build();
-      line("OPEN(" + how + ") source=" + srcName(source) + " state=" + r.getState()
-          + " minBuf=" + min);
+          .setBufferSizeInBytes(Math.max(min, FRAME * 2 * 8))
+          .setContext(context)
+          .build();
+      line("OPEN source=" + srcName(source) + " state=" + r.getState() + " minBuf=" + min);
       if (r.getState() != AudioRecord.STATE_INITIALIZED) {
         r.release();
-        line("OPEN(" + how + ") failed: not initialised for " + srcName(source));
+        line("OPEN failed: not initialised for " + srcName(source));
         return null;
       }
       r.startRecording();
-      line("OPEN(" + how + ") recordingState=" + r.getRecordingState() + " (3 = RECORDING)");
+      line("OPEN recordingState=" + r.getRecordingState() + " (3 = RECORDING)");
       line("ROUTE capture device=" + describe(r.getRoutedDevice()));
       return r;
     } catch (Exception e) {
-      line("OPEN(" + how + ") exception source=" + srcName(source) + ": " + e + causeOf(e));
+      line("OPEN exception source=" + srcName(source) + ": " + e + causeOf(e));
       dumpAudioLogs();
       return null;
     }
@@ -377,6 +385,7 @@ public class ProbeService extends IProbeService.Stub {
       int minBuf = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO,
           AudioFormat.ENCODING_PCM_16BIT);
       t = new AudioTrack.Builder()
+          .setContext(context)
           .setAudioAttributes(new AudioAttributes.Builder()
               .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
               .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
