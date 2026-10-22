@@ -119,6 +119,9 @@ public class ProbeService extends IProbeService.Stub {
       case 1: src = MediaRecorder.AudioSource.MIC; break;
       case 2: src = MediaRecorder.AudioSource.VOICE_CALL; break;
       case 3: src = MediaRecorder.AudioSource.UNPROCESSED; break;
+      // Call-only sources (framework values: VOICE_UPLINK=2, VOICE_DOWNLINK=3).
+      case 4: src = 2; break;
+      case 5: src = 3; break;
       default: src = MediaRecorder.AudioSource.VOICE_COMMUNICATION; break;
     }
     monitorSource = src;
@@ -456,6 +459,8 @@ public class ProbeService extends IProbeService.Stub {
       case MediaRecorder.AudioSource.VOICE_COMMUNICATION: return "VOICE_COMMUNICATION";
       case MediaRecorder.AudioSource.UNPROCESSED: return "UNPROCESSED";
       case MediaRecorder.AudioSource.VOICE_RECOGNITION: return "VOICE_RECOGNITION";
+      case 2: return "VOICE_UPLINK";
+      case 3: return "VOICE_DOWNLINK";
       default: return "source" + s;
     }
   }

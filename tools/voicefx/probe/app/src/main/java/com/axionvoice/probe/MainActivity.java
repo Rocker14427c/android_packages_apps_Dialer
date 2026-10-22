@@ -43,7 +43,7 @@ import rikka.shizuku.Shizuku;
 public class MainActivity extends Activity {
   private static final int REQ_ROLE = 2;
   private static final int REQ_PERMS = 3;
-  private static final int PROBE_VERSION = 3;
+  private static final int PROBE_VERSION = 4;
   private static final int LOG_MAX = 80000;
 
   private final Handler main = new Handler(Looper.getMainLooper());
@@ -207,6 +207,12 @@ public class MainActivity extends Activity {
         button("Call uplink (VOICE_COMMUNICATION)", v -> setSource(0)),
         button("Mic (MIC)", v -> setSource(1)),
         button("Call audio (VOICE_CALL)", v -> setSource(2))));
+
+    root.addView(section("2b. Mute test: turn on Mute, speak, and watch the RMS lines"));
+    root.addView(row(
+        button("UNPROCESSED", v -> setSource(3)),
+        button("VOICE_UPLINK", v -> setSource(4)),
+        button("VOICE_DOWNLINK", v -> setSource(5))));
 
     root.addView(section("3. Tests you can run during a call"));
     root.addView(row(
