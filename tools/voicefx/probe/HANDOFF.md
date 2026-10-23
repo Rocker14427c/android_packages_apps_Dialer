@@ -257,3 +257,22 @@ These are on GitHub. Fetch with `gh api` (branch `lineage-24.0` in LineageOS mir
 place/answer call, RMS during call, mute test, tone, record 10 s, restore dialer).
 A–H are answered for the current approach (see section 6). Any new experiment should get
 its own short numbered steps for the user, written the same simple way.
+
+## 15. Addendum: the root module uses the same mute-then-inject design
+
+Checked after the handoff was written (sources: `tools/voicefx/`, `java/com/android/incallui/voicefx/VoiceFxController.java`, AOSP/LineageOS `AudioFlinger.cpp`):
+
+- The root VoiceFX module (`VoiceFxController`) runs the same pipeline as the probe:
+  `AudioRecord(VOICE_COMMUNICATION)` → DSP → `AudioTrack` to `TYPE_TELEPHONY`. It mutes the
+  natural uplink with `TelecomAdapter.mute(true)`, the same call as the Mute button.
+  Its comments assume the mute does **not** silence its own capture.
+- `AudioFlinger::setMicMute` (frameworks/av, `services/audioflinger/AudioFlinger.cpp`)
+  requires `MODIFY_AUDIO_SETTINGS`, then sets the mute on the HAL devices. It has **no
+  per-client exception**. Privileged apps get no special treatment at this layer.
+- Our logs (V8) show the mute silencing capture on this device. So the root module would
+  most likely also silence its own capture here. This is unverified: the module has not been
+  run on this phone, and the user has no root.
+
+What root changes is **who runs the code** (a priv-app inside the Dialer, with no Shizuku
+needed) and what can be modified in the system. It does not change the mute behaviour.
+Any next experiment must be judged against this, not against the module's assumptions.
